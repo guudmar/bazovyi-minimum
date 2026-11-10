@@ -3,10 +3,11 @@ import { useState, type ReactNode } from 'react';
 import { useParams } from 'react-router-dom';
 import { act, useData } from '../../data/store';
 import { byId, material, objectName, PURCHASE_LABEL, PURCHASE_TONE, REQUEST_LABEL, REQUEST_TONE } from '../../data/select';
-import { AmountInput, Btn, Card, Empty, Field, List, Page, Pill, RouteBar, Row, Sheet, toast } from '../../ui/kit';
+import { AmountInput, Btn, Card, Empty, Field, List, More, Page, Pill, RouteBar, Row, Sheet, toast } from '../../ui/kit';
+import { ShareButton } from '../../shared/extras';
 import { addDays, dFull, dRel, dShort, daysBetween, money, qty } from '../../lib/format';
 import type { Purchase } from '../../data/types';
-import { dash, rub, wantLate } from './lib';
+import { DELIVERY, dash, deliveryOf, rub, wantLate } from './lib';
 
 interface Form { supplier: string; price: string; terms: string; eta: string; invoice: boolean; alt: string }
 type Patch = Partial<Pick<Purchase, 'supplier' | 'price' | 'terms' | 'eta' | 'invoice' | 'alt'>>;
@@ -20,18 +21,24 @@ function parsePrice(s: string): number {
 export function PaySheet({ p, supplier, price, onClose }: { p: Purchase; supplier: string; price: number; onClose: () => void }) {
   const d = useData();
   const m = material(d, p.materialId);
-  const [amount, setAmount] = useState(Math.round(price * p.qty));
-  const [basis, setBasis] = useState(`${supplier || 'Поставщик не выбран'}: ${m.name}, ${qty(p.qty, m.unit)}, закупка № ${p.num}`);
-  const [due, setDue] = useState(addDays(d.today, 2));
-  const [entityId, setEntityId] = useState(byId(d.objects, p.objectId)?.entityId ?? d.entities[0]?.id ?? '');
+  // what the sheet opened with: only a real edit makes it ask before closing
+  const [start] = useState(() => ({
+    amount: Math.round(price * p.qty), basis: `${supplier || 'Поставщик не выбран'}: ${m.name}, ${qty(p.qty, m.unit)}, закупка № ${p.num}`,
+    due: addDays(d.today, 2), entityId: byId(d.objects, p.objectId)?.entityId ?? d.entities[0]?.id ?? '',
+  }));
+  const [amount, setAmount] = useState(start.amount);
+  const [basis, setBasis] = useState(start.basis);
+  const [due, setDue] = useState(start.due);
+  const [entityId, setEntityId] = useState(start.entityId);
   const ok = amount > 0 && !!basis.trim() && !!due && !!entityId;
+  const dirty = amount !== start.amount || basis !== start.basis || due !== start.due || entityId !== start.entityId;
   const submit = () => {
     act.createRequest({ amount, basis: basis.trim(), articleId: 'a-out1', entityId, objectId: p.objectId, due, purchaseId: p.id });
     toast(`Заявка на ${money(amount)} отправлена на согласование`);
     onClose();
   };
   return (
-    <Sheet open title="Запрос оплаты" onClose={onClose}
+    <Sheet open title="Запрос оплаты" onClose={onClose} dirty={dirty}
       foot={<><Btn onClick={onClose}>Отмена</Btn><Btn kind="primary" disabled={!ok} onClick={submit}>Отправить на согласование</Btn></>}>
       <div className="form">
         <Field label="Сумма" help={price ? `${rub(price)} × ${qty(p.qty, m.unit)} = ${money(price * p.qty)}` : 'Цена в закупке не указана, введите сумму вручную.'}>
@@ -52,6 +59,8 @@ export function PaySheet({ p, supplier, price, onClose }: { p: Purchase; supplie
   );
 }
 
+const QUEUE_PATH = { label: 'Очередь закупок', to: '/supplier/queue' };
+
 function PurchaseView({ p }: { p: Purchase }) {
   const d = useData();
   const m = material(d, p.materialId);
@@ -70,6 +79,10 @@ function PurchaseView({ p }: { p: Purchase }) {
   const known = [...new Set([...d.purchases.map((x) => x.supplier), ...d.tradeOrders.map((x) => x.supplier)].filter((x): x is string => !!x))]
     .sort((a, b) => a.localeCompare(b, 'ru'));
   const reqs = d.requests.filter((r) => r.purchaseId === p.id);
+  // the delivery appears when the supplier ships; from then on its state is the foreman's to change
+  const dl = deliveryOf(d, p);
+  const dlLine = dl?.lines.find((l) => l.partId === p.partId);
+  const label = `Закупка № ${p.num}`;
 
   // what differs from the saved purchase: the patch for the store and a plain sentence for the history
   const patch: Patch = {};
@@ -108,7 +121,8 @@ function PurchaseView({ p }: { p: Purchase }) {
             : undefined;
 
   return (
-    <Page back title={`Закупка № ${p.num}`} sub={sub[p.status]} actions={step}>
+    <Page title={label} sub={sub[p.status]} path={[QUEUE_PATH, { label: `№ ${p.num}` }]}
+      actions={<><ShareButton path={`/supplier/purchase/${p.id}`} title={label} />{step}</>}>
       <Card title={m.name} action={<Pill tone={PURCHASE_TONE[p.status]}>{PURCHASE_LABEL[p.status]}</Pill>}>
         <div className="stack" style={{ gap: 14 }}>
           <dl className="kv left">
@@ -181,6 +195,27 @@ function PurchaseView({ p }: { p: Purchase }) {
         )}
       </Card>
 
+      {dl && dlLine && (
+        <Card title={`Поставка № ${dl.num}`} action={<Pill tone={DELIVERY[dl.status].tone}>{DELIVERY[dl.status].label}</Pill>}>
+          <div className="stack" style={{ gap: 10 }}>
+            <dl className="kv left">
+              <dt>{dl.status === 'expected' ? 'Ждут на объекте' : 'Получена'}</dt>
+              <dd className={dl.status === 'expected' && dl.eta < d.today ? 'neg' : ''}>{dFull(dl.status === 'expected' ? dl.eta : dl.receivedAt ?? dl.eta)}</dd>
+              <dt>Отправлено</dt><dd>{qty(dlLine.qty, m.unit)}</dd>
+              <dt>Получено</dt>
+              <dd>{dlLine.received === undefined
+                ? <span className="muted">прораб ещё не подтвердил</span>
+                : <span className={dlLine.received < dlLine.qty ? 'neg' : ''}>{qty(dlLine.received, m.unit)}</span>}</dd>
+              <dt>В документе отгрузки</dt><dd>{dlLine.sourceName ? `${dlLine.sourceName}${dlLine.sourceCode ? `, код ${dlLine.sourceCode}` : ''}` : dash}</dd>
+              <dt>Место хранения</dt><dd>{dl.place ?? dash}</dd>
+              <dt>Комментарий прораба</dt><dd>{dl.comment ?? dash}</dd>
+            </dl>
+            <p className="muted" style={{ fontSize: 13 }}>Отправка ещё не получение: закупка закроется, когда прораб подтвердит получение на объекте.</p>
+            <div><More to="/supplier/deliveries">Все поставки</More></div>
+          </div>
+        </Card>
+      )}
+
       <Card title="Оплата" action={<Btn onClick={() => setPay(true)}>Запросить оплату</Btn>} flush>
         {reqs.length ? (
           <List>
@@ -211,8 +246,8 @@ export function PurchasePage() {
   const p = byId(d.purchases, id);
   if (!p) {
     return (
-      <Page title="Закупка" back="/supplier/queue">
-        <Card><Empty>Такой закупки нет. Вернитесь в очередь и выберите другую.</Empty></Card>
+      <Page title="Закупка" path={[QUEUE_PATH, { label: 'Не найдена' }]}>
+        <Card><Empty>Такой закупки нет. В очереди можно выбрать другую.</Empty></Card>
       </Page>
     );
   }

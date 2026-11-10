@@ -7,6 +7,7 @@ import type { RoleId } from './data/types';
 import { Shell } from './shell/Shell';
 import { EnterAs, Login } from './shell/Login';
 import { Notifications, Profile, SearchPage, Tasks } from './shared/common';
+import { Documents, Modules, Tech } from './shared/composer';
 import { routes as owner } from './roles/owner';
 import { routes as foreman } from './roles/foreman';
 import { routes as manager } from './roles/manager';
@@ -30,6 +31,9 @@ export default function App() {
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/profile" element={<Profile />} />
+            <Route path="/documents" element={<Documents />} />
+            <Route path="/tech" element={<Tech />} />
+            <Route path="/modules" element={<Modules />} />
             <Route path="/as/:role" element={<EnterAs />} />
             <Route path="*" element={<Navigate to={`/${role}`} replace />} />
           </Routes>

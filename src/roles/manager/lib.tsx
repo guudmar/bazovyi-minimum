@@ -1,9 +1,9 @@
 // Pieces shared by the manager's screens: one flat list of need lines and the figures derived from it.
 import type { ReactNode } from 'react';
-import { lineState, lineStats, material, objectName, stockView } from '../../data/select';
-import type { Data, DeliveryLine, Material, Need, NeedLine } from '../../data/types';
+import { byId, geoVersionLabel, lineState, lineStats, material, objectName, stockView, type Tone } from '../../data/select';
+import type { Data, Delivery, DeliveryLine, Material, Need, NeedLine, TradeOrder } from '../../data/types';
 import { RouteBar } from '../../ui/kit';
-import { num } from '../../lib/format';
+import { num, qty } from '../../lib/format';
 
 export const dash: ReactNode = <span className="muted">—</span>;
 /** A quantity without its unit: whole numbers as they are, fractions with one decimal. */
@@ -61,4 +61,38 @@ export function LineCell({ name, line }: { name: ReactNode; line: NeedLine }) {
       <div style={{ margin: '6px 0 2px', maxWidth: 320 }}><RouteBar line={line} /></div>
     </>
   );
+}
+
+/* ------------------------------------------------------- linked records */
+export const DELIVERY_STATE: Record<Delivery['status'], { label: string; tone: Tone }> = {
+  expected: { label: 'В пути на объект', tone: 'hue' }, received: { label: 'Получена', tone: 'positive' }, problem: { label: 'С расхождением', tone: 'negative' },
+};
+/** The delivery a part of a need travels with, once there is one. */
+export const deliveryOfPart = (d: Data, partId?: string): Delivery | undefined =>
+  (partId ? d.deliveries.find((x) => x.lines.some((l) => l.partId === partId)) : undefined);
+export function orderState(o: TradeOrder): { label: string; tone: Tone } {
+  if (o.status === 'arrived') return { label: 'Поступил на склад', tone: 'positive' };
+  return o.status === 'delayed' ? { label: 'Задержка', tone: 'negative' } : { label: 'В пути на склад', tone: 'neutral' };
+}
+/** A delivery differs from the order: a line is short, wrong or damaged, or something arrived that was not ordered. */
+export const deliveryDiffers = (dl: Delivery): boolean =>
+  dl.status === 'problem' || !!dl.extras?.length || dl.lines.some((l) => !!l.issue || (l.received !== undefined && l.received !== l.qty));
+
+/** The place a need was created for: «1 этаж, Гостиная». A need without a place is for the whole object. */
+export function placeText(d: Data, floor?: string, roomId?: string): string | undefined {
+  const room = byId(d.rooms, roomId);
+  const parts = [floor ?? room?.floor, room?.name].filter(Boolean);
+  return parts.length ? parts.join(', ') : undefined;
+}
+/** What the quantities of a need were calculated from. */
+export function basisText(d: Data, b: NonNullable<Need['basis']>): string {
+  const norm = byId(d.norms, b.normId);
+  const geo = byId(d.geoVersions, b.geoVersionId);
+  const version = b.normVersion ?? norm?.version;
+  return [
+    norm ? `Рассчитано по технологической карте «${norm.work}»` : 'Рассчитано по нормам расхода',
+    version ? `версия ${version}` : '',
+    b.volume !== undefined ? `объём ${qty(b.volume, norm?.unit ?? '').trim()}` : '',
+    geo ? `геометрия: ${geoVersionLabel(geo)}` : geoVersionLabel(undefined),
+  ].filter(Boolean).join(', ');
 }

@@ -1,6 +1,7 @@
 // Demo data. Every name, company and amount here is invented.
 // Dates are written as offsets from "today", so the demo always looks current.
 import { addDays } from '../lib/format';
+import { enrich } from './seed-extra';
 import type {
   Data, Operation, Need, NeedPart, Delivery, SiteMove, Work, Room, MoneyRequest, PlanItem, Purchase, TradeOrder,
 } from './types';
@@ -121,7 +122,7 @@ export function makeSeed(today: string): Data {
     { id: 'w6', objectId: 'o1', name: 'Монтаж радиаторов', unit: 'шт', plan: 6, accepted: 4, deadline: d(2), facts: [fact(-12, 4, 2)] },
     { id: 'w7', objectId: 'o2', roomId: 'rm6', name: 'Разводка электрики', unit: 'м', plan: 240, accepted: 0, deadline: d(3), facts: [fact(-6, 90), fact(-2, 60)] },
     { id: 'w8', objectId: 'o2', roomId: 'rm8', name: 'Разводка труб', unit: 'м', plan: 60, accepted: 0, deadline: d(7), facts: [] },
-    { id: 'w9', objectId: 'o3', name: 'Демонтаж перегородок', unit: 'м²', plan: 86, accepted: 0, deadline: d(5), facts: [{ date: d(-4), qty: 40, by: 'Руслан Каримов', photos: 2 }] },
+    { id: 'w9', objectId: 'o3', name: 'Демонтаж перегородок', unit: 'м²', plan: 86, accepted: 0, deadline: d(5), facts: [{ date: d(-36), qty: 25, by: 'Руслан Каримов', photos: 0, note: 'Состояние на дату подключения объекта к системе' }, { date: d(-4), qty: 15, by: 'Руслан Каримов', photos: 2 }] },
   ];
 
   const needs: Need[] = [
@@ -318,6 +319,9 @@ export function makeSeed(today: string): Data {
       { id: 'o2', name: 'Квартира на Садовой, 7', address: 'ул. Садовая, 7, кв. 32', customer: 'Никитина Е. В.', contract: 'Договор № 15 от ' + dfull(d(-50)), status: 'active', stage: 'Электрика и сантехника', foremanId: 'u-foreman1', entityId: 'e2', contractSum: 2350000, planCost: 1780000, start: d(-50), finish: d(35) },
       { id: 'o3', name: 'Офис на Заводской, 3', address: 'ул. Заводская, 3, 2 этаж', customer: 'ООО «Полюс-Логистик»', contract: 'Договор № 17 от ' + dfull(d(-36)), status: 'active', stage: 'Демонтаж', foremanId: 'u-foreman2', entityId: 'e1', contractSum: 4200000, planCost: 3300000, start: d(-36), finish: d(70) },
     ],
+    floors: [],
+    geoVersions: [],
+    sources: [],
     rooms,
     acts: [
       { id: 'act1', num: 1, objectId: 'o1', date: d(-58), by: 'Игорь Савельев', rooms: 5, floorArea: 79.4 },
@@ -400,6 +404,7 @@ export function makeSeed(today: string): Data {
     ],
   };
 
+  enrich(data, d);
   check(data);
   return data;
 }

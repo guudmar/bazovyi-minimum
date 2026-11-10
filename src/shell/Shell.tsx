@@ -1,12 +1,13 @@
 // The frame around every workspace.
 // Desktop: a labelled sidebar on the page ground. Phone: a top bar with the scope and a bottom bar of four sections plus «Ещё».
 import { useEffect, useState, type ReactNode } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Bell, Ellipsis, ListChecks, Search, CircleUser } from 'lucide-react';
+import { Link, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
+import { Bell, Ellipsis, FileText, ListChecks, Plus, Search, CircleUser } from 'lucide-react';
 import { act, useData, useUser } from '../data/store';
 import { noticesFor, tasksFor } from '../data/select';
 import { Avatar, Sheet, Toaster } from '../ui/kit';
 import { NAV, ROLE_LABEL, activeItem, type NavItem } from './nav';
+import { Launcher } from '../shared/composer';
 
 export function Mark({ size = 24 }: { size?: number }) {
   return (
@@ -21,9 +22,13 @@ export function Mark({ size = 24 }: { size?: number }) {
 
 const COMMON: NavItem[] = [
   { to: '/tasks', label: 'Мои задачи', icon: ListChecks },
+  { to: '/documents', label: 'Документы', icon: FileText },
   { to: '/notifications', label: 'Уведомления', icon: Bell },
   { to: '/search', label: 'Поиск', icon: Search },
 ];
+
+/** Scroll position of every visited screen, so «Назад» returns to the same place in a list. */
+const scrolls = new Map<string, number>();
 
 export function Shell({ children }: { children: ReactNode }) {
   const d = useData();
@@ -31,6 +36,8 @@ export function Shell({ children }: { children: ReactNode }) {
   const loc = useLocation();
   const nav = useNavigate();
   const [more, setMore] = useState(false);
+  const [launch, setLaunch] = useState(false);
+  const navType = useNavigationType();
   const items = NAV[user.role];
   const current = activeItem([...items, ...COMMON, { to: '/profile', label: 'Профиль', icon: CircleUser }], loc.pathname);
   const taskCount = tasksFor(d, user).length;
@@ -38,7 +45,17 @@ export function Shell({ children }: { children: ReactNode }) {
   const objects = d.objects.filter((o) => user.objectIds?.includes(o.id));
   const object = objects.find((o) => o.id === d.session.objectId) ?? objects[0];
 
-  useEffect(() => { window.scrollTo(0, 0); setMore(false); }, [loc.pathname]);
+  useEffect(() => {
+    setMore(false);
+    setLaunch(false);
+    // a new screen opens at the top; going back returns to where the person was
+    // an address typed by hand has no key of its own, so the path is part of the key
+    const at = `${loc.key}:${loc.pathname}${loc.search}`;
+    window.scrollTo(0, navType === 'POP' ? scrolls.get(at) ?? 0 : 0);
+    const save = () => scrolls.set(at, window.scrollY);
+    window.addEventListener('scroll', save, { passive: true });
+    return () => window.removeEventListener('scroll', save);
+  }, [loc.key, loc.pathname, loc.search, navType]);
 
   const groups: { name: string; items: NavItem[] }[] = [];
   for (const it of items) {
@@ -82,6 +99,7 @@ export function Shell({ children }: { children: ReactNode }) {
           </span>
         </Link>
         {objectSelect}
+        <button className="btn block" style={{ margin: '8px 0 4px' }} onClick={() => setLaunch(true)}><Plus size={16} /> Что нужно сделать</button>
         <nav aria-label="Разделы">
           {groups.map((g) => (
             <div key={g.name}>
@@ -116,6 +134,7 @@ export function Shell({ children }: { children: ReactNode }) {
               </>
             )}
           </div>
+          <button className="icon-btn" aria-label="Что нужно сделать" onClick={() => setLaunch(true)}><Plus size={23} strokeWidth={1.8} /></button>
           <Link to="/search" className="icon-btn" aria-label="Поиск"><Search size={21} strokeWidth={1.7} /></Link>
           <Link to="/notifications" className="icon-btn" aria-label={`Уведомления: ${noticeCount}`}>
             <Bell size={21} strokeWidth={1.7} />
@@ -158,6 +177,7 @@ export function Shell({ children }: { children: ReactNode }) {
           })}
         </div>
       </Sheet>
+      <Launcher open={launch} onClose={() => setLaunch(false)} />
       <Toaster />
     </div>
   );

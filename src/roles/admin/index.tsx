@@ -9,7 +9,7 @@ import {
   userName, weeklyFlows, needState, type Scope,
 } from '../../data/select';
 import {
-  AmountInput, Btn, Card, Chips, DataTable, Empty, Field, List, Money, More, Page, Pill, Row, Seg, Sheet, Stats, Tabs, Two, toast, useWide, type Col,
+  AmountInput, Btn, Card, Chips, DataTable, Empty, Field, List, Money, More, Page, Pill, Row, Seg, Sheet, Stats, Tabs, Two, toast, useSticky, useWide, type Col,
 } from '../../ui/kit';
 import { BarList, FlowChart, ForecastChart } from '../../ui/charts';
 import { OpAmount, OpRow, OpSheet, OperationForm, opSub, opTitle } from '../../shared/money';
@@ -81,8 +81,8 @@ function Home() {
 function Finance() {
   const d = useData();
   const nav = useNavigate();
-  const [dir, setDir] = useState('all');
-  const [days, setDays] = useState('30');
+  const [dir, setDir] = useSticky('admin.fin.dir', 'all');
+  const [days, setDays] = useSticky('admin.fin.days', '30');
   const scope: Scope = dir === 'all' ? {} : { directionId: dir };
   const from = addDays(d.today, -(Number(days) - 1));
   const ops = flowOps(d, scope, from, d.today);
@@ -123,10 +123,13 @@ function Operations() {
   const d = useData();
   const wide = useWide();
   const [params, setParams] = useSearchParams();
-  const [kind, setKind] = useState('all');
-  const [days, setDays] = useState('30');
-  const [q, setQ] = useState('');
-  const [f, setF] = useState({ entity: '', register: params.get('register') ?? '', article: '', object: '' });
+  const [kind, setKind] = useSticky('admin.ops.kind', 'all');
+  const [days, setDays] = useSticky('admin.ops.days', '30');
+  const [q, setQ] = useSticky('admin.ops.q', '');
+  const [saved, setF] = useSticky('admin.ops.f', { entity: '', register: '', article: '', object: '' });
+  // a link from the finance centre opens the registry already filtered by that register
+  const linked = params.get('register');
+  const f = linked && linked !== saved.register ? { ...saved, entity: '', register: linked } : saved;
   const [filters, setFilters] = useState(false);
   const [form, setForm] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
@@ -212,7 +215,7 @@ function Operations() {
 /* ------------------------------------------------------------- transits */
 function Transits() {
   const d = useData();
-  const [tab, setTab] = useState<'way' | 'done' | 'bank'>('way');
+  const [tab, setTab] = useSticky<'way' | 'done' | 'bank'>('admin.tr.tab', 'way');
   const [info, setInfo] = useState(false);
   const way = transits(d);
   const done = d.operations.filter((o) => o.kind === 'transfer' && o.transit === 'received').sort((a, b) => (b.receivedDate ?? '').localeCompare(a.receivedDate ?? ''));

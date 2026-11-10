@@ -36,12 +36,38 @@ export function Toaster() {
   return text ? <div className="toast" role="status">{text}</div> : null;
 }
 
+/**
+ * State of a screen that survives leaving it and coming back: filters, the chosen tab, the period.
+ * Kept in memory for the session, so «Назад» returns to the list the way the person left it.
+ */
+const sticky = new Map<string, unknown>();
+export function useSticky<T>(key: string, initial: T): [T, (v: T) => void] {
+  const [v, set] = useState<T>(() => (sticky.has(key) ? (sticky.get(key) as T) : initial));
+  return [v, (next: T) => { sticky.set(key, next); set(next); }];
+}
+
 /* ----------------------------------------------------------------- page */
-export function Page(p: { title: ReactNode; sub?: ReactNode; actions?: ReactNode; back?: boolean | string; children: ReactNode }) {
+export interface Crumb { label: string; to?: string }
+/** The path to the screen: Объекты / Дом на Лесной, 14 / 1 этаж / Геометрия. Every step but the last is a link. */
+export function Crumbs({ path }: { path: Crumb[] }) {
+  return (
+    <nav className="crumbs" aria-label="Путь">
+      {path.map((c, i) => (
+        <span key={c.label + i}>
+          {i > 0 && <span className="sep" aria-hidden>/</span>}
+          {c.to && i < path.length - 1 ? <Link to={c.to}>{c.label}</Link> : <span aria-current={i === path.length - 1 ? 'page' : undefined}>{c.label}</span>}
+        </span>
+      ))}
+    </nav>
+  );
+}
+
+export function Page(p: { title: ReactNode; sub?: ReactNode; actions?: ReactNode; back?: boolean | string; path?: Crumb[]; children: ReactNode }) {
   const nav = useNavigate();
   return (
     <div className="page">
-      {p.back && (
+      {p.path && <Crumbs path={p.path} />}
+      {p.back && !p.path && (
         <button className="back" onClick={() => (typeof p.back === 'string' ? nav(p.back) : nav(-1))}>
           <ChevronLeft size={16} /> Назад
         </button>
@@ -138,7 +164,7 @@ export function Row(p: RowProps) {
       {p.media}
       <div className="row-main">
         <div className={`row-title ${p.wrap ? 'wrap' : ''}`}>{p.title}</div>
-        {p.sub && <div className="row-sub">{p.sub}</div>}
+        {p.sub && <div className={`row-sub ${p.wrap ? 'wrap' : ''}`}>{p.sub}</div>}
       </div>
       {(p.value !== undefined || p.meta) && (
         <div className="row-side">
@@ -311,25 +337,34 @@ export function Photos({ count, onChange }: { count: number; onChange: (n: numbe
 
 /* --------------------------------------------------------------- sheets */
 /** A bottom sheet on a phone, a dialog on a desktop. Short jobs open here instead of on a new page. */
-export function Sheet(p: { open: boolean; title: string; onClose: () => void; children: ReactNode; foot?: ReactNode; wide?: boolean }) {
+export function Sheet(p: { open: boolean; title: string; onClose: () => void; children: ReactNode; foot?: ReactNode; wide?: boolean; dirty?: boolean }) {
+  const [ask, setAsk] = useState(false);
+  // a form with typed data is not closed by a stray tap: the person is asked first
+  const close = () => { if (p.dirty) setAsk(true); else p.onClose(); };
   useEffect(() => {
-    if (!p.open) return;
+    if (!p.open) { setAsk(false); return; }
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') p.onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
     window.addEventListener('keydown', onKey);
     return () => { document.body.style.overflow = prev; window.removeEventListener('keydown', onKey); };
-  }, [p.open, p.onClose]);
+  }, [p.open, p.onClose, p.dirty]);
   if (!p.open) return null;
   return (
-    <div className="sheet-back" onMouseDown={(e) => { if (e.target === e.currentTarget) p.onClose(); }}>
+    <div className="sheet-back" onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
       <div className={`sheet ${p.wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={p.title}>
         <div className="sheet-head">
           <h2>{p.title}</h2>
-          <button className="icon-btn" aria-label="Закрыть" onClick={p.onClose}><X size={20} /></button>
+          <button className="icon-btn" aria-label="Закрыть" onClick={close}><X size={20} /></button>
         </div>
         <div className="sheet-body">{p.children}</div>
-        {p.foot && <div className="sheet-foot">{p.foot}</div>}
+        {ask ? (
+          <div className="sheet-foot" role="alertdialog" aria-label="Несохранённые данные">
+            <span style={{ flex: '1 1 100%', marginBottom: 4 }}>Закрыть без сохранения? Введённые данные пропадут.</span>
+            <Btn onClick={() => setAsk(false)}>Вернуться к форме</Btn>
+            <Btn kind="danger" onClick={() => { setAsk(false); p.onClose(); }}>Закрыть без сохранения</Btn>
+          </div>
+        ) : p.foot && <div className="sheet-foot">{p.foot}</div>}
       </div>
     </div>
   );

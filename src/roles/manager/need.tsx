@@ -1,15 +1,17 @@
-// One need: the manager's central decision screen. Each position is routed here, whole or in parts.
+// One need: the manager's central decision screen. Each position is routed here, whole or in parts,
+// and every part opens the record behind it: the warehouse position, the trade order, the purchase, the delivery.
 import { useState, type ReactNode } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { act, useData } from '../../data/store';
 import {
   byId, lineState, lineStats, material, needProgress, needState, objectName, stockView, userName,
-  LINE_LABEL, LINE_TONE, NEED_LABEL, NEED_TONE, PART_LABEL, ROUTE_LABEL,
+  LINE_LABEL, LINE_TONE, NEED_LABEL, NEED_TONE, PART_LABEL, PURCHASE_LABEL, PURCHASE_TONE, ROUTE_LABEL,
 } from '../../data/select';
 import { Btn, Card, Empty, Field, List, Page, Pill, RouteBar, Row, Sheet, Stepper, toast, useWide } from '../../ui/kit';
+import { ShareButton } from '../../shared/extras';
 import { addDays, count, dFull, dShort, pct, qty } from '../../lib/format';
 import type { Need, NeedLine, NeedPart, Route } from '../../data/types';
-import { dash, n1 } from './lib';
+import { DELIVERY_STATE, basisText, dash, deliveryOfPart, n1, orderState, placeText } from './lib';
 
 /** What is known about a part beyond its status: the date it is expected or how much really arrived. */
 function partNote(p: NeedPart, unit: string, today: string): ReactNode {
@@ -36,6 +38,53 @@ const ROUTE_BTN: { route: Route; label: string }[] = [
   { route: 'clarify', label: 'Уточнить' },
 ];
 
+const linkStyle = { minHeight: 28 } as const;
+
+/**
+ * The records behind one part, each with its number, its state and a link: the warehouse position a reserve is held on,
+ * the order of the trade direction, the purchase at the supplier, the delivery to the site.
+ */
+function PartRecords({ part: p, materialId }: { part: NeedPart; materialId: string }) {
+  const d = useData();
+  const order = d.tradeOrders.find((o) => o.partId === p.id);
+  const pu = d.purchases.find((x) => x.partId === p.id);
+  const dl = deliveryOfPart(d, p.id);
+  const rows: { key: string; node: ReactNode }[] = [];
+  if (p.status === 'reserved') {
+    rows.push({ key: 'stock', node: (
+      <><Link className="link" style={linkStyle} to={`/manager/stock?open=${materialId}`}>Складская позиция</Link> <span className="muted">· {stockView(d, materialId).place}</span></>
+    ) });
+  }
+  if (order) {
+    const st = orderState(order);
+    rows.push({ key: 'order', node: (
+      <><Link className="link" style={linkStyle} to={`/manager/orders?open=${order.id}`}>Заказ № {order.num}</Link> <span className="muted">· {order.supplier}</span> <Pill tone={st.tone}>{st.label}</Pill></>
+    ) });
+  }
+  if (pu) {
+    rows.push({ key: 'purchase', node: (
+      <>
+        <Link className="link" style={linkStyle} to={`/manager/handoff?open=${pu.id}`}>Закупка № {pu.num}</Link>{' '}
+        <span className="muted">· {pu.supplier ?? 'поставщик не выбран'}</span> <Pill tone={PURCHASE_TONE[pu.status]}>{PURCHASE_LABEL[pu.status]}</Pill>
+      </>
+    ) });
+  }
+  if (dl) {
+    rows.push({ key: 'delivery', node: (
+      <>
+        <Link className="link" style={linkStyle} to={`/manager/supply?open=${dl.id}`}>Поставка № {dl.num}</Link>{' '}
+        <span className="muted">· {dl.source}</span> <Pill tone={DELIVERY_STATE[dl.status].tone}>{DELIVERY_STATE[dl.status].label}</Pill>
+      </>
+    ) });
+  }
+  if (!rows.length) return null;
+  return (
+    <div style={{ fontWeight: 400, fontSize: 13, lineHeight: '18px', display: 'grid', gap: 2, marginTop: 2 }}>
+      {rows.map((r) => <div key={r.key}>{r.node}</div>)}
+    </div>
+  );
+}
+
 function LineCard({ need, line, onRoute }: { need: Need; line: NeedLine; onRoute: (route: Route) => void }) {
   const d = useData();
   const wide = useWide();
@@ -57,7 +106,7 @@ function LineCard({ need, line, onRoute }: { need: Need; line: NeedLine; onRoute
         </div>
         <RouteBar line={line} legend />
         <p className="muted num" style={{ fontSize: 13 }}>
-          На складе доступно {qty(sv.available, m.unit)} · в резерве {n1(sv.reserved)} · ожидается {n1(sv.expected)}
+          {m.code ? `${m.code} · ` : ''}На складе доступно {qty(sv.available, m.unit)} · в резерве {n1(sv.reserved)} · ожидается {n1(sv.expected)}
         </p>
       </div>
       {line.parts.length > 0 && (
@@ -67,7 +116,8 @@ function LineCard({ need, line, onRoute }: { need: Need; line: NeedLine; onRoute
             {line.parts.map((p) => {
               const note = partNote(p, m.unit, d.today);
               return (
-                <Row key={p.id} wrap title={ROUTE_LABEL[p.route]}
+                <Row key={p.id} wrap
+                  title={<><div>{ROUTE_LABEL[p.route]}</div><PartRecords part={p} materialId={line.materialId} /></>}
                   sub={<>{PART_LABEL[p.status]}{note && <> · {note}</>}</>}
                   value={qty(p.qty, m.unit)}
                   side={canReturn(p) ? <Btn small onClick={() => back(p)}>Вернуть</Btn> : undefined} />
@@ -78,10 +128,12 @@ function LineCard({ need, line, onRoute }: { need: Need; line: NeedLine; onRoute
       )}
       <hr className="divider" />
       <div className="card-body stack" style={{ gap: 10 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-          <span className={st.open > 0 ? '' : 'muted'}>Не распределено</span>
-          <span className={`num ${st.open > 0 ? '' : 'muted'}`} style={{ fontWeight: st.open > 0 ? 600 : 400 }}>{qty(st.open, m.unit)}</span>
-        </div>
+        <dl className="kv">
+          <dt>Распределено по маршрутам</dt><dd>{qty(st.allocated, m.unit)}</dd>
+          <dt>Из них получено на объекте</dt><dd>{qty(st.received, m.unit)}</dd>
+          <dt style={st.open > 0 ? { color: 'var(--text)' } : undefined}>Не распределено</dt>
+          <dd style={{ fontWeight: st.open > 0 ? 600 : 400 }} className={st.open > 0 ? '' : 'muted'}>{qty(st.open, m.unit)}</dd>
+        </dl>
         {st.open > 0 && (
           <div style={wide ? { display: 'flex', gap: 8, flexWrap: 'wrap' } : { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
             {ROUTE_BTN.map((b) => (
@@ -128,7 +180,7 @@ export function RouteSheet({ need, line, route, onClose }: { need: Need; line: N
   };
 
   return (
-    <Sheet open title={SHEET_TITLE[route]} onClose={onClose}
+    <Sheet open title={SHEET_TITLE[route]} onClose={onClose} dirty={!!text.trim() || !!supplier.trim()}
       foot={<><Btn onClick={onClose}>Отмена</Btn><Btn kind="primary" disabled={!ok} onClick={submit}>{SHEET_ACTION[route]}</Btn></>}>
       <div className="form">
         <p className="muted">
@@ -169,6 +221,8 @@ export function RouteSheet({ need, line, route, onClose }: { need: Need; line: N
   );
 }
 
+const QUEUE_PATH = { label: 'Очередь потребностей', to: '/manager/needs' };
+
 export function NeedPage() {
   const { id } = useParams();
   const d = useData();
@@ -176,8 +230,8 @@ export function NeedPage() {
   const need = byId(d.needs, id);
   if (!need) {
     return (
-      <Page title="Потребность" back="/manager/needs">
-        <Card><Empty>Такой потребности нет. Вернитесь в очередь и выберите другую.</Empty></Card>
+      <Page title="Потребность" path={[QUEUE_PATH, { label: 'Не найдена' }]}>
+        <Card><Empty>Такой потребности нет. В очереди можно выбрать другую.</Empty></Card>
       </Page>
     );
   }
@@ -190,6 +244,7 @@ export function NeedPage() {
   const inClarify = parts.some((p) => p.status === 'clarify');
   const answered = !!need.question?.answer && inClarify;
   const sheetLine = need.lines.find((l) => l.id === sheet?.lineId);
+  const label = `Потребность № ${need.num}`;
 
   let sub: string;
   if (state === 'done') sub = 'Все позиции получены на объекте.';
@@ -205,14 +260,21 @@ export function NeedPage() {
   };
 
   return (
-    <Page back title={`Потребность № ${need.num}`} sub={sub}
-      actions={reserved > 0 ? <Btn kind="primary" onClick={ship}>Отправить со склада на объект</Btn> : undefined}>
+    <Page title={label} sub={sub} path={[QUEUE_PATH, { label: `№ ${need.num}` }]}
+      actions={(
+        <>
+          <ShareButton path={`/manager/needs/${need.id}`} title={label} />
+          {reserved > 0 && <Btn kind="primary" onClick={ship}>Отправить со склада на объект</Btn>}
+        </>
+      )}>
       <Card>
         <dl className="kv left">
           <dt>Объект</dt><dd>{objectName(d, need.objectId)}</dd>
+          <dt>Место</dt><dd>{placeText(d, need.floor, need.roomId) ?? 'Весь объект'}</dd>
           <dt>Автор</dt><dd>{author ? `${author.name}, ${author.title.toLowerCase()}` : dash}</dd>
           <dt>Дата</dt><dd>{dFull(need.date)}</dd>
           <dt>Срочность</dt><dd>{need.urgent ? <Pill tone="negative">Срочно</Pill> : 'Обычная'}</dd>
+          <dt>Основание</dt><dd>{need.basis ? basisText(d, need.basis) : 'Количество указал прораб, расчёта по карте нет'}</dd>
           <dt>Комментарий</dt><dd>{need.comment ?? dash}</dd>
           <dt>Состояние</dt>
           <dd><Pill tone={NEED_TONE[state]}>{NEED_LABEL[state]}</Pill> <span className="muted">· получено {pct(needProgress(need))}</span></dd>
@@ -226,7 +288,7 @@ export function NeedPage() {
             {need.question.answer
               ? <p><span className="muted">{foreman}:</span> {need.question.answer}</p>
               : <p className="muted">Прораб ещё не ответил.</p>}
-            {answered && <p className="muted" style={{ fontSize: 13 }}>Чтобы распределить количество из уточнения, нажмите «Вернуть» у этой части и выберите маршрут.</p>}
+            {answered && <p className="muted" style={{ fontSize: 13 }}>Количество из уточнения распределяется после кнопки «Вернуть» у этой части: оно снова станет нераспределённым.</p>}
           </div>
         </Card>
       )}

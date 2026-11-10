@@ -2,7 +2,7 @@
 import { addDays, daysBetween, weekStart, money, qty, count, dShort } from '../lib/format';
 import type {
   Data, Operation, Register, Article, NeedLine, Need, PartStatus, Route, Work, User, Material, BuildObject,
-  IssueKind, RequestStatus, Purchase, SiteMove,
+  IssueKind, RequestStatus, Purchase, SiteMove, GeoStatus, GeoVersion, GeoTotals, MeasureMethod, SurfaceElement, Room,
 } from './types';
 
 export function byId<T extends { id: string }>(arr: T[], id?: string | null): T | undefined {
@@ -205,7 +205,9 @@ export function siteStock(d: Data, objectId: string): SiteRow[] {
     if (m.kind === 'return') row.returned += m.qty;
   }
   const rows = [...map.values()];
-  for (const r of rows) r.left = r.received - r.moved - r.used - r.lost - r.returned;
+  // a move to another place of the same site keeps the material on the object; only a move away from the site reduces what is left
+  const away = (id: string) => d.siteMoves.filter((m) => m.objectId === objectId && m.materialId === id && m.kind === 'move' && !m.place).reduce((s, m) => s + m.qty, 0);
+  for (const r of rows) r.left = r.received - away(r.material.id) - r.used - r.lost - r.returned;
   return rows.sort((a, b) => a.material.name.localeCompare(b.material.name, 'ru'));
 }
 export const MOVE_LABEL: Record<SiteMove['kind'], string> = {
@@ -299,6 +301,11 @@ export function tasksFor(d: Data, u: User): Task[] {
   if (u.role === 'foreman') {
     for (const dl of d.deliveries.filter((x) => x.status === 'expected' && mine.has(x.objectId) && x.eta <= d.today))
       t.push({ id: dl.id, title: `Подтвердить получение: ${dl.source}`, sub: `${objectName(d, dl.objectId)} · ${count(dl.lines.length, 'позиция', 'позиции', 'позиций')}`, to: `/foreman/deliveries/${dl.id}`, tone: 'hue' });
+    for (const f of d.floors.filter((x) => mine.has(x.objectId))) {
+      const v = currentGeo(d, f.objectId, f.name);
+      if (v?.status === 'draft' && roomsOn(d, f.objectId, f.name).length)
+        t.push({ id: v.id, title: `Передать геометрию на проверку: ${f.name}`, sub: `${objectName(d, f.objectId)} · версия ${v.num}${v.note ? ' · возвращена: ' + v.note : v.reason ? ' · ' + v.reason : ''}`, to: '/foreman/geometry', tone: v.note ? 'warning' : 'neutral' });
+    }
     for (const n of d.needs.filter((x) => mine.has(x.objectId) && x.question && !x.question.answer))
       t.push({ id: n.id, title: `Ответить менеджеру по потребности № ${n.num}`, sub: n.question!.text, to: `/foreman/needs/${n.id}`, tone: 'warning' });
     for (const w of d.works.filter((x) => mine.has(x.objectId))) {
@@ -317,7 +324,7 @@ export function tasksFor(d: Data, u: User): Task[] {
     for (const n of d.needs.filter((x) => needOpenQty(x) > 0))
       t.push({ id: n.id, title: `Распределить потребность № ${n.num}`, sub: `${objectName(d, n.objectId)} · ${count(n.lines.filter((l) => lineStats(l).open > 0).length, 'позиция', 'позиции', 'позиций')} без маршрута`, to: `/manager/needs/${n.id}`, tone: n.urgent ? 'negative' : 'hue' });
     for (const o of d.tradeOrders.filter((x) => x.status === 'delayed'))
-      t.push({ id: o.id, title: `Задержка заказа № ${o.num}: ${o.supplier}`, sub: `${material(d, o.materialId).name} · ждали ${dShort(o.eta)}`, to: '/manager/orders', tone: 'negative' });
+      t.push({ id: o.id, title: `Задержка заказа № ${o.num}: ${o.supplier}`, sub: `${material(d, o.materialId).name} · ждали ${dShort(o.eta)}`, to: `/manager/orders?open=${o.id}`, tone: 'negative' });
     for (const n of d.needs.filter((x) => x.question?.answer && x.lines.some((l) => l.parts.some((p) => p.status === 'clarify'))))
       t.push({ id: n.id + 'a', title: `Прораб ответил по потребности № ${n.num}`, sub: n.question!.answer!, to: `/manager/needs/${n.id}`, tone: 'hue' });
   }
@@ -334,6 +341,13 @@ export function tasksFor(d: Data, u: User): Task[] {
     if (unmatched.length) t.push({ id: 'bank', title: `Сопоставить с банком: ${count(unmatched.length, 'операция', 'операции', 'операций')}`, sub: `На сумму ${money(unmatched.reduce((s, o) => s + o.amount, 0))}`, to: '/admin/transits', tone: 'warning' });
     for (const r of d.requests.filter((x) => x.status === 'approved' || x.status === 'noted'))
       t.push({ id: r.id, title: `Оплатить согласованную заявку № ${r.num}`, sub: `${money(r.amount)} · ${r.basis}`, to: '/admin/requests', tone: r.due <= d.today ? 'negative' : 'hue' });
+    for (const f of d.floors) {
+      const v = currentGeo(d, f.objectId, f.name);
+      if (v?.status === 'review')
+        t.push({ id: v.id, title: `Проверить геометрию: ${objectName(d, f.objectId)}, ${f.name}`, sub: `версия ${v.num} · передана ${dShort(v.sentAt ?? v.createdAt)}`, to: `/admin/objects/${f.objectId}?tab=geometry`, tone: 'hue' });
+    }
+    const queue = d.sources.filter((x) => x.status !== 'matched');
+    if (queue.length) t.push({ id: 'catalog', title: `Разобрать номенклатуру: ${count(queue.length, 'позиция', 'позиции', 'позиций')}`, sub: queue.slice(0, 2).map((x) => x.name).join('; '), to: '/admin/refs?tab=queue', tone: 'neutral' });
     for (const a of d.avrs.filter((x) => x.status === 'review'))
       t.push({ id: a.id, title: `Проверить АВР № ${a.num}`, sub: `${objectName(d, a.objectId)} · от ${dShort(a.date)}`, to: `/admin/objects/${a.objectId}?tab=avr`, tone: 'hue' });
   }
@@ -364,6 +378,8 @@ export function noticesFor(d: Data, u: User): Notice[] {
         n.push({ id: p.id, at: p.eta ?? need.date, title: `Едет на объект: ${material(d, l.materialId).name}`, sub: `${qty(p.qty, material(d, l.materialId).unit)} · потребность № ${need.num}`, to: '/foreman/deliveries' });
       if (need.question && !need.question.answer) n.push({ id: need.id + 'q', at: need.date, title: `Вопрос по потребности № ${need.num}`, sub: `${need.question.by}: ${need.question.text}`, to: `/foreman/needs/${need.id}` });
     }
+    for (const v of d.geoVersions.filter((x) => mine.has(x.objectId) && (x.status === 'confirmed' || (x.status === 'draft' && x.note))))
+      n.push({ id: v.id, at: v.confirmedAt ?? v.createdAt, title: v.status === 'confirmed' ? `Геометрия подтверждена: ${v.floor}, версия ${v.num}` : `Геометрия возвращена на доработку: ${v.floor}`, sub: `${objectName(d, v.objectId)}${v.note ? ' · ' + v.note : ''}`, to: '/foreman/geometry' });
     for (const a of d.avrs.filter((x) => mine.has(x.objectId) && x.status !== 'review'))
       n.push({ id: a.id, at: a.date, title: `АВР № ${a.num}: ${a.status === 'accepted' ? 'объёмы приняты' : 'возвращён на доработку'}`, sub: objectName(d, a.objectId), to: '/foreman/fact' });
     for (const r of d.requests.filter((x) => x.authorId === u.id && x.decisions.length))
@@ -411,4 +427,105 @@ export function search(d: Data, u: User, q: string): Hit[] {
   if (canMoney || u.role === 'supplier') for (const r of d.requests) if (has(r.basis, `заявка ${r.num}`))
     hits.push({ id: r.id, kind: 'Заявка на деньги', title: `№ ${r.num} · ${money(r.amount)}`, sub: `${r.basis} · ${REQUEST_LABEL[r.status]}`, to: u.role === 'owner' ? '/owner/approvals' : u.role === 'admin' ? '/admin/requests' : '/supplier/money' });
   return hits.slice(0, 40);
+}
+
+/* ------------------------------------------- geometry: floors and versions */
+
+export const GEO_LABEL: Record<GeoStatus, string> = { draft: 'Черновик', review: 'На проверке', confirmed: 'Подтверждена', replaced: 'Заменена новой версией' };
+export const GEO_TONE: Record<GeoStatus, Tone> = { draft: 'neutral', review: 'warning', confirmed: 'positive', replaced: 'neutral' };
+export const METHOD_LABEL: Record<MeasureMethod, string> = { manual: 'Ручной ввод', laser: 'Лазерный дальномер', phone: 'Измерение телефоном' };
+export const ELEMENT_LABEL: Record<SurfaceElement['kind'], string> = { niche: 'Ниша', ledge: 'Выступ или короб', slope: 'Откосы', other: 'Другая поверхность' };
+
+/** Floors of an object in the order they were added; a floor that only exists on a room is included too. */
+export function floorsOf(d: Data, objectId: string): string[] {
+  const names = d.floors.filter((f) => f.objectId === objectId).map((f) => f.name);
+  for (const r of d.rooms) if (r.objectId === objectId && !names.includes(r.floor)) names.push(r.floor);
+  return names;
+}
+export const roomsOn = (d: Data, objectId: string, floor: string): Room[] => d.rooms.filter((r) => r.objectId === objectId && r.floor === floor);
+export function floorVersions(d: Data, objectId: string, floor: string): GeoVersion[] {
+  return d.geoVersions.filter((v) => v.objectId === objectId && v.floor === floor).sort((a, b) => b.num - a.num);
+}
+/** The version being worked on: the newest one. */
+export const currentGeo = (d: Data, objectId: string, floor: string): GeoVersion | undefined => floorVersions(d, objectId, floor)[0];
+/** The version calculations may rely on: the newest confirmed one. */
+export const confirmedGeo = (d: Data, objectId: string, floor: string): GeoVersion | undefined =>
+  floorVersions(d, objectId, floor).find((v) => v.status === 'confirmed');
+
+export const elementArea = (e: SurfaceElement): number => round1(e.length * e.height * e.count);
+/** Reveals of doors and windows are their own surface and are not part of the walls. */
+export const roomSlopes = (r: Room): number => round1((r.elements ?? []).filter((e) => e.kind === 'slope').reduce((s, e) => s + elementArea(e), 0));
+/** The surface a work is calculated from. Walls include niches and ledges measured in the room. */
+export function roomSurface(r: Room, base: 'walls' | 'floor' | 'ceiling'): number {
+  if (base !== 'walls') return roomFloor(r);
+  const extra = (r.elements ?? []).filter((e) => e.kind === 'niche' || e.kind === 'ledge' || e.kind === 'other').reduce((s, e) => s + elementArea(e), 0);
+  return round1(roomWalls(r) + extra);
+}
+export function totalsOf(rooms: Room[]): GeoTotals {
+  const sum = (f: (r: Room) => number) => round1(rooms.reduce((s, r) => s + f(r), 0));
+  return { rooms: rooms.length, floor: sum(roomFloor), walls: sum((r) => roomSurface(r, 'walls')), ceiling: sum(roomFloor), perimeter: sum((r) => 2 * (r.length + r.width)) };
+}
+/**
+ * The room as it was measured in the confirmed version of its floor. Volumes for planning are taken from here,
+ * so a draft that is still being edited never leaks into a calculation.
+ */
+export function basisRoom(d: Data, room: Room): Room | undefined {
+  return confirmedGeo(d, room.objectId, room.floor)?.snapshot?.find((r) => r.id === room.id);
+}
+/** True when the floor has a newer version than the confirmed one: the basis is about to change. */
+export function basisIsOld(d: Data, objectId: string, floor: string): boolean {
+  const c = confirmedGeo(d, objectId, floor);
+  return !!c && currentGeo(d, objectId, floor)?.id !== c.id;
+}
+export const geoVersionLabel = (v?: GeoVersion): string => (v ? `${v.floor}, версия ${v.num}` : 'геометрия не подтверждена');
+
+/** Storage places on a site: the site store and every floor. */
+export function sitePlaces(d: Data, objectId: string): string[] {
+  return ['Склад на объекте', ...floorsOf(d, objectId)];
+}
+
+/* ------------------------------------------------------------- documents */
+
+export interface Doc { id: string; kind: string; title: string; sub: string; date: string; status: string; tone: Tone; to: string; objectId?: string }
+/**
+ * Documents and working records as results of processes. Each one keeps its status, author, date and
+ * the link to the record it came from; the list shows only what the role may see.
+ */
+export function documents(d: Data, u: User): Doc[] {
+  const docs: Doc[] = [];
+  const mine = (objectId: string) => u.role !== 'foreman' || !!u.objectIds?.includes(objectId);
+  const role = u.role;
+  if (role === 'foreman' || role === 'admin') {
+    for (const a of d.acts.filter((x) => mine(x.objectId))) {
+      const v = byId(d.geoVersions, a.versionId);
+      docs.push({ id: a.id, kind: 'Акт геометрии', title: `Акт геометрии № ${a.num}${a.floor ? ', ' + a.floor : ''}`, sub: `${objectName(d, a.objectId)} · ${a.by}`, date: a.date,
+        status: v ? GEO_LABEL[v.status] : 'Сформирован', tone: v ? GEO_TONE[v.status] : 'neutral', objectId: a.objectId,
+        to: role === 'admin' ? `/admin/objects/${a.objectId}?tab=geometry` : `/foreman/geometry?floor=${encodeURIComponent(a.floor ?? '')}` });
+    }
+    for (const a of d.avrs.filter((x) => mine(x.objectId)))
+      docs.push({ id: a.id, kind: 'АВР', title: `Акт выполненных работ № ${a.num}`, sub: `${objectName(d, a.objectId)} · ${a.by}`, date: a.date,
+        status: a.status === 'accepted' ? 'Объёмы приняты' : a.status === 'review' ? 'На проверке' : 'Возвращён', tone: a.status === 'accepted' ? 'positive' : a.status === 'review' ? 'warning' : 'negative',
+        objectId: a.objectId, to: role === 'admin' ? `/admin/objects/${a.objectId}?tab=avr` : '/foreman/fact' });
+    for (const i of d.issues.filter((x) => mine(x.objectId)))
+      docs.push({ id: i.id, kind: 'Замечание', title: i.text, sub: `${objectName(d, i.objectId)} · ${i.place}`, date: i.date,
+        status: i.status === 'done' ? 'Решено' : i.status === 'work' ? 'Решается' : 'Открыто', tone: i.status === 'done' ? 'positive' : i.status === 'work' ? 'warning' : 'negative',
+        objectId: i.objectId, to: role === 'admin' ? `/admin/objects/${i.objectId}` : '/foreman/issues' });
+  }
+  if (role !== 'owner') {
+    for (const n of d.needs.filter((x) => mine(x.objectId)))
+      docs.push({ id: n.id, kind: 'Потребность', title: `Потребность в материалах № ${n.num}`, sub: `${objectName(d, n.objectId)} · ${userName(d, n.authorId)}`, date: n.date,
+        status: NEED_LABEL[needState(n)], tone: NEED_TONE[needState(n)], objectId: n.objectId,
+        to: role === 'foreman' ? `/foreman/needs/${n.id}` : role === 'manager' ? `/manager/needs/${n.id}` : role === 'supplier' ? '/supplier/queue' : '/admin/requests?tab=tmc' });
+    for (const dl of d.deliveries.filter((x) => mine(x.objectId)))
+      docs.push({ id: dl.id, kind: 'Поставка', title: `Поставка № ${dl.num}: ${dl.source}`, sub: objectName(d, dl.objectId), date: dl.receivedAt ?? dl.eta,
+        status: dl.status === 'expected' ? 'Ждёт получения' : dl.status === 'problem' ? 'С расхождением' : 'Получена', tone: dl.status === 'expected' ? 'hue' : dl.status === 'problem' ? 'negative' : 'positive',
+        objectId: dl.objectId, to: role === 'foreman' ? `/foreman/deliveries/${dl.id}` : role === 'manager' ? `/manager/supply?open=${dl.id}` : role === 'supplier' ? '/supplier/deliveries' : `/admin/objects/${dl.objectId}?tab=materials` });
+  }
+  if (role === 'owner' || role === 'admin' || role === 'supplier' || role === 'foreman') {
+    for (const r of d.requests.filter((x) => role === 'owner' || role === 'admin' || x.authorId === u.id))
+      docs.push({ id: r.id, kind: 'Заявка на деньги', title: `Заявка № ${r.num} на ${money(r.amount)}`, sub: `${r.basis} · ${userName(d, r.authorId)}`, date: r.date,
+        status: REQUEST_LABEL[r.status], tone: REQUEST_TONE[r.status], objectId: r.objectId,
+        to: role === 'owner' ? '/owner/approvals' : role === 'admin' ? '/admin/requests' : role === 'supplier' ? '/supplier/money' : '/tasks' });
+  }
+  return docs.sort((a, b) => b.date.localeCompare(a.date));
 }

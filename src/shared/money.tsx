@@ -80,6 +80,7 @@ export function OpSheet({ op, onClose, editable }: { op: Operation | null; onClo
               </>
             )}
             <dt>Комментарий</dt><dd>{op.comment ?? '—'}</dd>
+            {byId(d.requests, op.requestId) && <><dt>Основание</dt><dd>Заявка № {byId(d.requests, op.requestId)?.num} от {dShort(byId(d.requests, op.requestId)!.date)}, {userName(d, byId(d.requests, op.requestId)?.authorId)}</dd></>}
             <dt>Внёс</dt><dd>{userName(d, op.authorId)}</dd>
             {op.bank && <><dt>Банк</dt><dd>{op.bank === 'matched' ? 'Сопоставлено с выпиской' : 'Не сопоставлено с выпиской'}</dd></>}
           </dl>

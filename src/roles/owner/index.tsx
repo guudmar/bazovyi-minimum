@@ -7,7 +7,7 @@ import {
   byId, flowOps, forecast, objectName, objectView, onHand, registersIn, registerBalance, sumIn, sumOut, transits, transitTotal,
   weeklyFlows, byArticle, lineState, needState, userName, transitAge, type Scope,
 } from '../../data/select';
-import { Btn, Card, Chips, DataTable, Empty, Finding, List, Money, More, Page, Pill, Row, Seg, Sheet, Stats, Tabs, Track, toast, type Col } from '../../ui/kit';
+import { Btn, Card, Chips, DataTable, Empty, Finding, List, Money, More, Page, Pill, Row, Seg, Sheet, Stats, Tabs, Track, toast, useSticky, type Col } from '../../ui/kit';
 import { BarList, FlowChart, ForecastChart } from '../../ui/charts';
 import { NoteSheet, OpRow, OpSheet, OperationForm, RequestCard, dueLabel, planStatus } from '../../shared/money';
 import { Notifications } from '../../shared/common';
@@ -19,7 +19,7 @@ const signed = (v: number): ReactNode => <span className={v < 0 ? 'neg' : v > 0 
 /* ------------------------------------------------------------------ home */
 function Home() {
   const d = useData();
-  const [dir, setDir] = useState('all');
+  const [dir, setDir] = useSticky('owner.home.dir', 'all');
   const [form, setForm] = useState(false);
   const scope: Scope = dir === 'all' ? {} : { directionId: dir };
   const hand = onHand(d, scope);
@@ -117,8 +117,8 @@ function Home() {
 /* --------------------------------------------------------------- finance */
 function Finance() {
   const d = useData();
-  const [scope, setScope] = useState<Scope>({});
-  const [days, setDays] = useState('30');
+  const [scope, setScope] = useSticky<Scope>('owner.fin.scope', {});
+  const [days, setDays] = useSticky('owner.fin.days', '30');
   const [op, setOp] = useState<Operation | null>(null);
   const from = addDays(d.today, -(Number(days) - 1));
   const ops = flowOps(d, scope, from, d.today);
@@ -261,7 +261,7 @@ function Calendar() {
 /* ------------------------------------------------------------- approvals */
 function Approvals() {
   const d = useData();
-  const [tab, setTab] = useState<'open' | 'all'>('open');
+  const [tab, setTab] = useSticky<'open' | 'all'>('owner.appr.tab', 'open');
   const [note, setNote] = useState<{ id: string; action: 'noted' | 'clarify' | 'rejected' } | null>(null);
   const open = d.requests.filter((r) => r.status === 'pending').sort((a, b) => a.due.localeCompare(b.due));
   const all = [...d.requests].sort((a, b) => b.date.localeCompare(a.date));
@@ -349,8 +349,8 @@ function Objects() {
 interface Slice { id: string; name: string; inc: number; out: number; ops: Operation[] }
 function Analytics() {
   const d = useData();
-  const [dim, setDim] = useState('direction');
-  const [days, setDays] = useState('30');
+  const [dim, setDim] = useSticky('owner.an.dim', 'direction');
+  const [days, setDays] = useSticky('owner.an.days', '30');
   const [open, setOpen] = useState<Slice | null>(null);
   const from = addDays(d.today, -(Number(days) - 1));
   const all = flowOps(d, {}, from, d.today);

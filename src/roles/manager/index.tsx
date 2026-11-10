@@ -1,10 +1,10 @@
 // The trade manager's workspace. Needs of the sites come in, every position is sent down one or several routes
 // (warehouse, trade order, supplier, a question to the foreman), and all parts stay tied to the original need.
-import { useState, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { act, useData } from '../../data/store';
 import { lineStats, material, needOpenQty, needProgress, needState, objectName, NEED_LABEL, NEED_TONE, type NeedState } from '../../data/select';
-import { Btn, Card, Chips, DataTable, Empty, List, More, Page, Pill, Row, Seg, Stats, Two, toast, useWide, type Col } from '../../ui/kit';
+import { Btn, Card, Chips, DataTable, Empty, List, More, Page, Pill, Row, Seg, Stats, Two, toast, useSticky, useWide, type Col } from '../../ui/kit';
 import { addDays, count, dRel, dShort, pct, qty } from '../../lib/format';
 import type { Data, Need } from '../../data/types';
 import { allLines, nearestWant, needTitle } from './lib';
@@ -85,7 +85,7 @@ function Home() {
                 const m = material(d, o.materialId);
                 const need = d.needs.find((n) => n.id === o.needId);
                 return (
-                  <Row key={o.id} to="/manager/orders" title={m.name}
+                  <Row key={o.id} to={`/manager/orders?open=${o.id}`} title={m.name}
                     sub={`Заказ № ${o.num} · ${o.supplier} · ${qty(o.qty, m.unit)}`}
                     value={<span className={o.eta < d.today ? 'neg' : ''}>{dRel(o.eta, d.today)}</span>}
                     meta={o.status === 'delayed' ? <Pill tone="negative">Задержка</Pill> : need ? `для № ${need.num}` : 'на склад'} />
@@ -153,8 +153,8 @@ function Queue() {
   const d = useData();
   const nav = useNavigate();
   const wide = useWide();
-  const [filter, setFilter] = useState<Filter>('all');
-  const [by, setBy] = useState<Grouping>('date');
+  const [filter, setFilter] = useSticky<Filter>('manager.queue.filter', 'all');
+  const [by, setBy] = useSticky<Grouping>('manager.queue.by', 'date');
   const cnt = (s: NeedState) => d.needs.filter((n) => needState(n) === s).length;
   const shown = filter === 'all' ? d.needs : d.needs.filter((n) => needState(n) === filter);
   const groups = buckets(d, shown, by);

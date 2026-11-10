@@ -4,9 +4,9 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { addDays, daysBetween, todayISO, money, qty as fmtQty, dShort } from '../lib/format';
 import { makeSeed } from './seed';
-import { byId, lineStats, material, stockView, workDone, objectName } from './select';
+import { byId, lineStats, material, stockView, workDone, objectName, currentGeo, confirmedGeo, roomsOn, totalsOf } from './select';
 import type {
-  Data, Session, Operation, AuditArea, Route, NeedPart, Room, IssueKind, Issue, SiteMove, Purchase, NormLine, PlanItem, User,
+  Data, Session, Operation, AuditArea, Route, NeedPart, Room, IssueKind, Issue, SiteMove, Purchase, NormLine, PlanItem, User, Need, NeedDraft, GeoVersion,
 } from './types';
 
 export type State = Data & { session: Session };
@@ -15,7 +15,7 @@ const KEY = 'bazovyi-minimum-demo';
 const fresh = (): State => ({ ...makeSeed(todayISO()), session: { userId: null, objectId: null } });
 
 // When the shape of the demo data changes, bump the version: an older saved demo is replaced by a fresh one.
-export const useStore = create<State>()(persist(fresh, { name: KEY, version: 4, migrate: () => fresh() }));
+export const useStore = create<State>()(persist(fresh, { name: KEY, version: 6, migrate: () => fresh() }));
 
 /** Shift every ISO date in the saved demo so that "today" in the data is the real today. */
 function rebase<T>(v: T, delta: number): T {
@@ -80,7 +80,15 @@ export const act = {
     mutate((d) => { d.session = { userId: null, objectId: null }; });
   },
   setObject(objectId: string) {
-    mutate((d) => { d.session.objectId = objectId; });
+    // a change of the object drops the place inside it: the context never silently points to another building
+    mutate((d) => { if (d.session.objectId !== objectId) { d.session.objectId = objectId; d.session.floor = undefined; d.session.roomId = undefined; } });
+  },
+  /** Remember the floor and the room the person is working in, so the next form opens with them filled in. */
+  setPlace(floor?: string, roomId?: string) {
+    mutate((d) => { d.session.floor = floor; d.session.roomId = roomId; });
+  },
+  saveNeedDraft(draft: NeedDraft | undefined) {
+    mutate((d) => { d.session.needDraft = draft; });
   },
   resetDemo() {
     const session = useStore.getState().session;
@@ -145,7 +153,7 @@ export const act = {
   },
 
   /* -------------------------------------------------------- money requests */
-  createRequest(input: { amount: number; basis: string; articleId: string; entityId: string; objectId?: string; due: string; purchaseId?: string }): string {
+  createRequest(input: { amount: number; basis: string; articleId: string; entityId: string; objectId?: string; due: string; purchaseId?: string; avrId?: string }): string {
     return mutate((d) => {
       const id = nid(d, 'rq');
       const num = nextNum(d.requests);
@@ -198,14 +206,16 @@ export const act = {
   },
 
   /* ----------------------------------------------------------------- needs */
-  createNeed(input: { objectId: string; comment?: string; urgent?: boolean; lines: { materialId: string; qty: number; wantDate: string; comment?: string }[] }): string {
+  createNeed(input: { objectId: string; comment?: string; urgent?: boolean; floor?: string; roomId?: string; basis?: Need['basis']; lines: { materialId: string; qty: number; wantDate: string; comment?: string }[] }): string {
     return mutate((d) => {
       const id = nid(d, 'n');
       const num = nextNum(d.needs);
       d.needs.push({
         id, num, objectId: input.objectId, date: d.today, authorId: me(d).id, comment: input.comment || undefined, urgent: input.urgent || undefined,
+        floor: input.floor || undefined, roomId: input.roomId || undefined, basis: input.basis,
         lines: input.lines.map((l, i) => ({ id: `${id}l${i + 1}`, materialId: l.materialId, qty: l.qty, wantDate: l.wantDate, comment: l.comment || undefined, parts: [] })),
       });
+      d.session.needDraft = undefined;
       log(d, 'ТМЦ', `Потребность № ${num}, ${objectName(d, input.objectId)}: создана`);
       return id;
     });
@@ -355,7 +365,8 @@ export const act = {
 
   /* ------------------------------------------------------------- site side */
   /** The foreman confirms what actually arrived, line by line. */
-  confirmDelivery(id: string, lines: { received: number; issue?: 'short' | 'wrong' | 'damaged' }[], comment?: string, photos = 0) {
+  confirmDelivery(id: string, lines: { received: number; issue?: 'short' | 'wrong' | 'damaged' }[], comment?: string, photos = 0,
+    opts: { place?: string; extras?: { sourceName: string; sourceCode?: string; qty: number; unit: string }[] } = {}) {
     mutate((d) => {
       const dl = byId(d.deliveries, id);
       if (!dl || dl.status !== 'expected') return;
@@ -372,7 +383,7 @@ export const act = {
           // a short delivery frees the missing quantity: it becomes unrouted again and the manager can cover it another way
           if (got.received < part.qty) part.qty = got.received;
         }
-        if (got.received > 0) d.siteMoves.push({ id: nid(d, 'sm'), objectId: dl.objectId, materialId: l.materialId, date: d.today, kind: 'receive', qty: got.received, note: `Поставка № ${dl.num}, ${dl.source}`, by: me(d).name });
+        if (got.received > 0) d.siteMoves.push({ id: nid(d, 'sm'), objectId: dl.objectId, materialId: l.materialId, date: d.today, kind: 'receive', qty: got.received, note: `Поставка № ${dl.num}, ${dl.source}`, by: me(d).name, place: opts.place || 'Склад на объекте' });
         const pu = d.purchases.find((p) => p.partId === l.partId);
         if (pu) {
           pu.status = 'received';
@@ -384,46 +395,135 @@ export const act = {
       dl.receivedAt = d.today;
       dl.comment = comment || undefined;
       dl.photos = photos;
+      dl.place = opts.place || 'Склад на объекте';
+      // what arrived outside the order is kept under its own name as a temporary record and goes to the normalisation queue
+      const extras = (opts.extras ?? []).filter((x) => x.sourceName.trim() && x.qty > 0);
+      if (extras.length) {
+        dl.extras = extras.map((x) => ({ id: nid(d, 'x'), ...x }));
+        for (const x of extras) d.sources.push({ id: nid(d, 's'), supplier: dl.source, code: x.sourceCode || undefined, name: x.sourceName.trim(), unit: x.unit, status: 'temp', seenAt: d.today, deliveryId: dl.id, qty: x.qty, note: `Пришло с поставкой № ${dl.num}, в потребности не было.` });
+        problem = true;
+      }
+      if (problem) dl.status = 'problem';
       log(d, 'ТМЦ', `Поставка № ${dl.num}, ${objectName(d, dl.objectId)}: ${problem ? 'получена с расхождением' : 'получена полностью'}`, undefined, comment || undefined);
     });
   },
-  addSiteMove(input: Pick<SiteMove, 'objectId' | 'materialId' | 'kind' | 'qty' | 'note'>) {
+  addSiteMove(input: Pick<SiteMove, 'objectId' | 'materialId' | 'kind' | 'qty' | 'note' | 'place'>) {
     mutate((d) => {
       d.siteMoves.push({ id: nid(d, 'sm'), date: d.today, by: me(d).name, ...input, note: input.note || undefined });
     });
   },
-  saveRoom(input: Omit<Room, 'id' | 'history' | 'measuredAt' | 'measuredBy'> & { id?: string }) {
+  /**
+   * Save a room's measurements. Confirmed geometry is never silently overwritten:
+   * a change after confirmation opens a new version of the floor with its reason, and every change is a line in the history.
+   */
+  saveRoom(input: Omit<Room, 'id' | 'history' | 'measuredAt' | 'measuredBy'> & { id?: string }, reason?: string) {
     mutate((d) => {
       const old = byId(d.rooms, input.id);
-      if (!old) {
-        d.rooms.push({ ...input, id: nid(d, 'rm'), measuredAt: d.today, measuredBy: me(d).name, history: [{ at: d.today, by: me(d).name, text: 'Первичный замер' }] });
-        log(d, 'Геометрия', `${input.name}, ${objectName(d, input.objectId)}: добавлено помещение`);
-        return;
-      }
+      const who = me(d).name;
+      if (!d.floors.some((f) => f.objectId === input.objectId && f.name === input.floor)) d.floors.push({ id: nid(d, 'f'), objectId: input.objectId, name: input.floor });
+      const deviation = (input.uneven ?? []).reduce((m, u) => Math.max(m, u.mm), input.uneven ? 0 : input.deviation ?? 0);
       const diff: string[] = [];
-      const cmp = (label: string, a: number | undefined, b: number | undefined, unit: string) => {
-        if ((a ?? 0) !== (b ?? 0)) diff.push(`${label}: ${a ?? 0} ${unit} → ${b ?? 0} ${unit}`);
-      };
-      cmp('Длина', old.length, input.length, 'м');
-      cmp('Ширина', old.width, input.width, 'м');
-      cmp('Высота', old.height, input.height, 'м');
-      cmp('Отклонение', old.deviation, input.deviation, 'мм');
-      if (old.openings.length !== input.openings.length) diff.push(`Проёмы: ${old.openings.length} → ${input.openings.length}`);
-      Object.assign(old, input, { id: old.id });
-      if (diff.length) {
-        // measurements are never silently overwritten: every change is a line in the history
-        old.history.push({ at: d.today, by: me(d).name, text: diff.join('; ') });
-        old.measuredAt = d.today;
-        log(d, 'Геометрия', `${old.name}, ${objectName(d, old.objectId)}: замер изменён`, undefined, diff.join('; '));
+      if (!old) {
+        d.rooms.push({ ...input, deviation, id: nid(d, 'rm'), measuredAt: d.today, measuredBy: who, history: [{ at: d.today, by: who, text: 'Первичный замер' }] });
+        diff.push('добавлено помещение');
+      } else {
+        const cmp = (label: string, a: number | undefined, b: number | undefined, unit: string) => {
+          if ((a ?? 0) !== (b ?? 0)) diff.push(`${label}: ${String(a ?? 0).replace('.', ',')} ${unit} → ${String(b ?? 0).replace('.', ',')} ${unit}`);
+        };
+        cmp('длина', old.length, input.length, 'м');
+        cmp('ширина', old.width, input.width, 'м');
+        cmp('высота', old.height, input.height, 'м');
+        cmp('отклонение', old.deviation, deviation, 'мм');
+        // every geometric edit counts, not only a change in the number of elements
+        const list = (label: string, a: unknown[] | undefined, b: unknown[] | undefined) => {
+          if (JSON.stringify(a ?? []) === JSON.stringify(b ?? [])) return;
+          diff.push((a?.length ?? 0) !== (b?.length ?? 0) ? `${label}: ${a?.length ?? 0} → ${b?.length ?? 0}` : `${label}: размеры изменены`);
+        };
+        list('проёмы', old.openings, input.openings);
+        list('ниши, выступы и откосы', old.elements, input.elements);
+        list('зоны', old.zones, input.zones);
+        if ((old.deviation ?? 0) === deviation) list('неровности', old.uneven, input.uneven);
+        const text = (label: string, a?: string, b?: string) => { if ((a ?? '') !== (b ?? '')) diff.push(`${label}: ${a || 'не указано'} → ${b || 'не указано'}`); };
+        text('название', old.name, input.name);
+        text('назначение', old.purpose, input.purpose);
+        if ((old.method ?? 'manual') !== (input.method ?? 'manual')) diff.push('изменён способ измерения');
+        Object.assign(old, input, { id: old.id, deviation });
+        if (diff.length) {
+          old.history.push({ at: d.today, by: who, text: diff.join('; ') + (reason ? `. Причина: ${reason}` : '') });
+          old.measuredAt = d.today;
+          old.measuredBy = who;
+        }
       }
+      if (!diff.length) return;
+      // the version of the floor this change belongs to
+      let ver = currentGeo(d, input.objectId, input.floor);
+      if (!ver || ver.status === 'confirmed' || ver.status === 'replaced') {
+        const next: GeoVersion = { id: nid(d, 'gv'), objectId: input.objectId, floor: input.floor, num: (ver?.num ?? 0) + 1, status: 'draft', createdAt: d.today, by: who,
+          reason: ver ? reason || 'Уточнение замеров' : undefined, changes: [] };
+        d.geoVersions.push(next);
+        ver = next;
+      } else if (ver.status === 'review') {
+        ver.status = 'draft';
+        ver.sentAt = undefined;
+        ver.changes.push({ at: d.today, by: who, text: 'Отозвано с проверки: внесены правки' });
+      }
+      ver.changes.push({ at: d.today, by: who, text: `${input.name}: ${diff.join('; ')}` });
+      log(d, 'Геометрия', `${input.name}, ${objectName(d, input.objectId)}: ${old ? 'замер изменён' : 'добавлено помещение'}`, undefined, diff.join('; ') + (reason ? `. Причина: ${reason}` : ''));
     });
   },
-  makeAct(objectId: string) {
+  /** Send the floor's geometry for checking. The act is formed for the whole floor, not for every room. */
+  sendFloor(objectId: string, floor: string) {
     mutate((d) => {
-      const rooms = d.rooms.filter((r) => r.objectId === objectId);
+      const ver = currentGeo(d, objectId, floor);
+      const rooms = roomsOn(d, objectId, floor);
+      if (!ver || ver.status !== 'draft' || !rooms.length) return;
+      ver.status = 'review';
+      ver.sentAt = d.today;
+      ver.note = undefined;
+      ver.totals = totalsOf(rooms);
+      ver.snapshot = structuredClone(rooms);
+      ver.changes.push({ at: d.today, by: me(d).name, text: 'Передано на проверку' });
       const num = nextNum(d.acts);
-      d.acts.push({ id: nid(d, 'act'), num, objectId, date: d.today, by: me(d).name, rooms: rooms.length, floorArea: Math.round(rooms.reduce((s, r) => s + r.length * r.width, 0) * 10) / 10 });
-      log(d, 'Геометрия', `Акт геометрии № ${num}: ${objectName(d, objectId)}`);
+      d.acts.push({ id: nid(d, 'act'), num, objectId, floor, versionId: ver.id, date: d.today, by: me(d).name, rooms: rooms.length, floorArea: ver.totals.floor });
+      log(d, 'Геометрия', `Акт геометрии № ${num}: ${objectName(d, objectId)}, ${floor}, версия ${ver.num} передана на проверку`);
+    });
+  },
+  /** The reviewer confirms the version or returns it. A confirmed version replaces the previous confirmed one, which stays in the history. */
+  decideFloor(objectId: string, floor: string, ok: boolean, note?: string) {
+    mutate((d) => {
+      const ver = currentGeo(d, objectId, floor);
+      if (!ver || ver.status !== 'review') return;
+      const who = me(d).name;
+      if (ok) {
+        for (const v of d.geoVersions) if (v.objectId === objectId && v.floor === floor && v.status === 'confirmed') v.status = 'replaced';
+        ver.status = 'confirmed';
+        ver.confirmedAt = d.today;
+        ver.confirmedBy = who;
+        ver.note = note || undefined;
+        ver.changes.push({ at: d.today, by: who, text: 'Подтверждено: версия может быть основанием для расчётов' });
+      } else {
+        ver.status = 'draft';
+        ver.note = note || undefined;
+        ver.changes.push({ at: d.today, by: who, text: `Возвращено на доработку${note ? ': ' + note : ''}` });
+      }
+      log(d, 'Геометрия', `${objectName(d, objectId)}, ${floor}, версия ${ver.num}: ${ok ? 'подтверждена' : 'возвращена на доработку'}`, undefined, note || undefined);
+    });
+  },
+  /** Kept for the object-level button: sends every floor that has a draft. */
+  makeAct(objectId: string) {
+    const d = useStore.getState();
+    for (const f of d.floors.filter((x) => x.objectId === objectId)) act.sendFloor(objectId, f.name);
+  },
+  /** Plan a work. Its volume keeps the link to the confirmed version of geometry it was taken from. */
+  createWork(input: { objectId: string; roomId?: string; normId?: string; name: string; unit: string; plan: number; deadline: string; crew?: string }): string {
+    return mutate((d) => {
+      const room = byId(d.rooms, input.roomId);
+      const geo = room ? confirmedGeo(d, input.objectId, room.floor) : undefined;
+      const id = nid(d, 'w');
+      d.works.push({ id, objectId: input.objectId, roomId: input.roomId || undefined, normId: input.normId || undefined, name: input.name, unit: input.unit,
+        plan: Math.round(input.plan * 10) / 10, accepted: 0, deadline: input.deadline, facts: [], crew: input.crew || undefined, geoVersionId: geo?.id });
+      log(d, 'АВР', `План работ, ${objectName(d, input.objectId)}: добавлена работа «${input.name}»`, undefined, `${String(input.plan).replace('.', ',')} ${input.unit}${geo ? `, по геометрии: ${geo.floor}, версия ${geo.num}` : ''}`);
+      return id;
     });
   },
   addFact(workId: string, amount: number, note?: string, photos = 0) {
@@ -457,15 +557,19 @@ export const act = {
       log(d, 'АВР', `АВР № ${a.num}, ${objectName(d, a.objectId)}: ${status === 'accepted' ? 'объёмы приняты' : 'возвращён на доработку'}`, undefined, note || undefined);
     });
   },
-  addIssue(input: { objectId: string; place: string; kind: IssueKind; text: string; photos: number }) {
+  /** A remark can be created from any place; it keeps the link to the record it came from. */
+  addIssue(input: { objectId: string; place: string; kind: IssueKind; text: string; photos: number; source?: Issue['source']; due?: string; responsible?: string }) {
     mutate((d) => {
-      d.issues.unshift({ id: nid(d, 'is'), date: d.today, status: 'open', by: me(d).name, ...input });
+      d.issues.unshift({ id: nid(d, 'is'), date: d.today, status: 'open', by: me(d).name, ...input, due: input.due || undefined, responsible: input.responsible || undefined,
+        history: [{ at: d.today, by: me(d).name, text: 'Замечание создано' }] });
     });
   },
   setIssueStatus(id: string, status: Issue['status']) {
     mutate((d) => {
       const i = byId(d.issues, id);
-      if (i) i.status = status;
+      if (!i || i.status === status) return;
+      i.status = status;
+      (i.history ??= []).push({ at: d.today, by: me(d).name, text: { open: 'Открыто снова', work: 'Взято в работу', done: 'Решено и закрыто' }[status] });
     });
   },
 
@@ -487,10 +591,43 @@ export const act = {
       log(d, 'Нормативы', `${n.work}: версия ${n.version}`, before, after);
     });
   },
-  addMaterial(input: { name: string; unit: string; group: string; price: number }) {
+  addMaterial(input: { name: string; unit: string; group: string; price: number; family?: string; pack?: string; useUnit?: string; k?: number }): string {
+    return mutate((d) => {
+      const id = nid(d, 'm');
+      // a normalised position gets its own internal code; a supplier's code is never reused for it
+      const code = `НП-${String(d.materials.length + 1).padStart(4, '0')}`;
+      d.materials.push({ id, code, ...input, family: input.family || input.name });
+      log(d, 'Справочники', `Материал добавлен: ${input.name}`, undefined, code);
+      return id;
+    });
+  },
+  updateMaterial(id: string, patch: { pack?: string; useUnit?: string; k?: number; family?: string; price?: number }) {
     mutate((d) => {
-      d.materials.push({ id: nid(d, 'm'), ...input });
-      log(d, 'Справочники', `Материал добавлен: ${input.name}`);
+      const m = byId(d.materials, id);
+      if (!m) return;
+      Object.assign(m, patch);
+      log(d, 'Справочники', `Материал изменён: ${m.name}`);
+    });
+  },
+  /** Link a supplier's position to a normalised one. Done by a person, after the technical equivalence was checked. */
+  matchSource(sourceId: string, materialId: string) {
+    mutate((d) => {
+      const src = byId(d.sources, sourceId);
+      const m = byId(d.materials, materialId);
+      if (!src || !m) return;
+      src.materialId = materialId;
+      src.status = 'matched';
+      log(d, 'Справочники', `Сопоставлено: «${src.name}» → ${m.name}`, src.code, m.code);
+    });
+  },
+  /** Leave a position as a temporary record: the fact of delivery is registered, no code is invented. */
+  keepSourceTemp(sourceId: string, note?: string) {
+    mutate((d) => {
+      const src = byId(d.sources, sourceId);
+      if (!src) return;
+      src.status = 'temp';
+      src.materialId = undefined;
+      if (note !== undefined) src.note = note || undefined;
     });
   },
   addArticle(input: { name: string; flow: 'in' | 'out' }) {

@@ -1,14 +1,18 @@
 // The foreman's workspace. He opens the app to do a job on site, usually with a phone in one hand,
 // so the home screen shows what to do now and puts the frequent actions one tap away.
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Boxes, ClipboardList, Hammer, Plus, Ruler, TriangleAlert, Truck } from 'lucide-react';
 import { act, useData, useUser } from '../../data/store';
-import { byId, lineState, material, objectView, roomFloor, round1, workDone, workState, workToPresent } from '../../data/select';
-import { Btn, Card, Empty, List, More, Page, Pill, Row, Seg, Stats, Tabs } from '../../ui/kit';
+import {
+  GEO_LABEL, byId, currentGeo, floorsOf, lineState, material, objectView, roomFloor, roomsOn, round1, totalsOf, workDone, workState, workToPresent,
+} from '../../data/select';
+import { Btn, Card, Empty, List, More, Page, Pill, Row, Seg, Stats, Tabs, useSticky } from '../../ui/kit';
+import { IssueButton } from '../../shared/extras';
 import { addDays, count, dFull, dRel, dShort, dWeek, num, pct, qty, weekStart } from '../../lib/format';
 import { Deliveries, DeliveriesBody, DeliveryConfirm, NeedDetail, NeedNew, Needs, NeedsBody, Stock, StockBody, useObject } from './materials';
-import { Fact, FactBody, Geometry, GeometryBody, Issues, IssuesBody, WorkLine, Works, WorksBody } from './works';
+import { Fact, FactBody, GeometryBody, Issues, IssuesBody, WorkLine, Works, WorksBody } from './works';
+import { FloorPage, GeoPill, Geometry, RoomPage, floorPath } from './geometry';
 import type { BuildObject, Data } from '../../data/types';
 
 /** What the foreman has to do on one object right now, most pressing first. */
@@ -110,22 +114,38 @@ function Objects() {
 }
 
 type WsTab = 'overview' | 'geometry' | 'works' | 'materials' | 'docs' | 'issues';
+type MatTab = 'needs' | 'deliveries' | 'stock';
 function Workspace() {
-  const d = useData();
   const { id } = useParams();
-  const o = byId(d.objects, id);
-  const [tab, setTab] = useState<WsTab>('overview');
-  const [mat, setMat] = useState<'needs' | 'deliveries' | 'stock'>('needs');
+  // a new key gives every object its own remembered tab
+  return <ObjectSpace key={id} id={id} />;
+}
+function ObjectSpace({ id }: { id?: string }) {
+  const d = useData();
+  const u = useUser();
+  const found = byId(d.objects, id);
+  const o = found && u.objectIds?.includes(found.id) ? found : undefined;
+  const [tab, setTab] = useSticky<WsTab>(`foreman/object/${id}/tab`, 'overview');
+  const [mat, setMat] = useSticky<MatTab>(`foreman/object/${id}/materials`, 'needs');
   useEffect(() => { if (o && d.session.objectId !== o.id) act.setObject(o.id); }, [o, d.session.objectId]);
-  if (!o) return <Page title="Объект не найден" back="/foreman/objects"><Card><Empty>У вас нет доступа к этому объекту.</Empty></Card></Page>;
+  if (!o) {
+    return (
+      <Page title="Объект не найден" path={[{ label: 'Объекты', to: '/foreman/objects' }, { label: 'Объект' }]}>
+        <Card><Empty>У вас нет доступа к этому объекту.</Empty></Card>
+      </Page>
+    );
+  }
   const rooms = d.rooms.filter((r) => r.objectId === o.id);
+  const floors = floorsOf(d, o.id);
   const v = objectView(d, o);
   const tasks = todo(d, o);
   const waiting = d.deliveries.filter((x) => x.objectId === o.id && x.status === 'expected');
-  const acts = d.acts.filter((a) => a.objectId === o.id);
-  const avrs = d.avrs.filter((a) => a.objectId === o.id);
+  const acts = d.acts.filter((a) => a.objectId === o.id).sort((a, b) => b.num - a.num);
+  const avrs = d.avrs.filter((a) => a.objectId === o.id).sort((a, b) => b.num - a.num);
   return (
-    <Page title={o.name} sub={`${o.stage} · ${o.address}`} back="/foreman/objects">
+    <Page title={o.name} path={[{ label: 'Объекты', to: '/foreman/objects' }, { label: o.name }]}
+      sub={`${o.stage}. ${tasks.length ? `Нужно сделать: ${count(tasks.length, 'дело', 'дела', 'дел')}` : 'Срочных дел по объекту нет'}.`}
+      actions={<IssueButton ctx={{ objectId: o.id, source: { kind: 'object', id: o.id, label: o.name } }} />}>
       <Tabs value={tab} onChange={setTab} tabs={[
         { value: 'overview', label: 'Обзор' }, { value: 'geometry', label: 'Геометрия' }, { value: 'works', label: 'Работы' },
         { value: 'materials', label: 'Материалы' }, { value: 'docs', label: 'Документы' }, { value: 'issues', label: 'Фото и замечания' },
@@ -139,18 +159,34 @@ function Workspace() {
             { label: 'Открытые замечания', value: v.openIssues, zero: !v.openIssues },
           ]} />
           <div className="grid cols-2">
-            <Card title="Об объекте">
-              <dl className="kv left">
-                <dt>Заказчик</dt><dd>{o.customer}</dd>
-                <dt>Договор</dt><dd>{o.contract}</dd>
-                <dt>Сроки</dt><dd>{dFull(o.start)} – {dFull(o.finish)}</dd>
-                <dt>Помещения</dt><dd>{count(rooms.length, 'помещение', 'помещения', 'помещений')}, {num(round1(rooms.reduce((s, r) => s + roomFloor(r), 0)), 1)} м² пола</dd>
-              </dl>
+            <Card title="Этажи" note={floors.length ? count(floors.length, 'этаж', 'этажа', 'этажей') : undefined} flush>
+              {floors.length ? (
+                <List>
+                  {floors.map((floor) => {
+                    const cur = currentGeo(d, o.id, floor);
+                    const t = totalsOf(roomsOn(d, o.id, floor));
+                    return (
+                      <Row key={floor} to={floorPath(floor)} title={floor}
+                        sub={`${count(t.rooms, 'помещение', 'помещения', 'помещений')} · пол ${num(t.floor, 1)} м²${cur ? ` · версия ${cur.num}` : ''}`}
+                        side={<GeoPill v={cur} />} />
+                    );
+                  })}
+                </List>
+              ) : <Empty>Замеров по объекту ещё нет.</Empty>}
             </Card>
             <Card title="Нужно сделать" flush>
               {tasks.length ? <List>{tasks.map((t) => <Row key={t.key + t.title} to={t.to} wrap title={t.title} sub={t.sub} />)}</List> : <Empty>Срочных дел по объекту нет.</Empty>}
             </Card>
           </div>
+          <Card title="Об объекте">
+            <dl className="kv left">
+              <dt>Адрес</dt><dd>{o.address}</dd>
+              <dt>Заказчик</dt><dd>{o.customer}</dd>
+              <dt>Договор</dt><dd>{o.contract}</dd>
+              <dt>Сроки</dt><dd>{dFull(o.start)} – {dFull(o.finish)}</dd>
+              <dt>Помещения</dt><dd>{count(rooms.length, 'помещение', 'помещения', 'помещений')}, {num(round1(rooms.reduce((s, r) => s + roomFloor(r), 0)), 1)} м² пола</dd>
+            </dl>
+          </Card>
         </>
       )}
       {tab === 'geometry' && <GeometryBody objectId={o.id} />}
@@ -168,9 +204,16 @@ function Workspace() {
           {acts.length + avrs.length ? (
             <List>
               {avrs.map((a) => <Row key={a.id} title={`Акт выполненных работ № ${a.num}`} sub={`${dShort(a.date)} · ${a.by}`} meta={a.status === 'accepted' ? 'принят' : a.status === 'review' ? 'на проверке' : 'возвращён'} />)}
-              {acts.map((a) => <Row key={a.id} title={`Акт геометрии № ${a.num}`} sub={`${dShort(a.date)} · ${a.by}`} meta={`${num(a.floorArea, 1)} м²`} />)}
+              {acts.map((a) => {
+                const ver = byId(d.geoVersions, a.versionId);
+                return (
+                  <Row key={a.id} to={a.floor ? floorPath(a.floor) : undefined} title={`Акт геометрии № ${a.num}${a.floor ? `, ${a.floor}` : ''}`}
+                    sub={`${dShort(a.date)} · ${a.by}${ver ? ` · версия ${ver.num}` : ''}`}
+                    value={`${num(a.floorArea, 1)} м²`} meta={ver ? GEO_LABEL[ver.status].toLowerCase() : undefined} />
+                );
+              })}
             </List>
-          ) : <Empty>Документы появятся, когда вы сформируете акт геометрии или АВР.</Empty>}
+          ) : <Empty>Документы появятся, когда этаж уйдёт на проверку геометрии или будет сформирован АВР.</Empty>}
         </Card>
       )}
       {tab === 'issues' && <IssuesBody objectId={o.id} />}
@@ -185,7 +228,7 @@ function SubNav({ items }: { items: { to: string; label: string; count?: number 
     <div className="subnav">
       <nav className="tabs" aria-label="Разделы группы">
         {items.map((i) => (
-          <Link key={i.to} to={i.to} aria-current={pathname === i.to ? 'page' : undefined}>
+          <Link key={i.to} to={i.to} aria-current={pathname === i.to || pathname.startsWith(i.to + '/') ? 'page' : undefined}>
             {i.label}{i.count ? <span className="badge">{i.count}</span> : null}
           </Link>
         ))}
@@ -206,6 +249,9 @@ export const routes = [
   { path: '/foreman/objects', element: <Objects /> },
   { path: '/foreman/object/:id', element: <Workspace /> },
   { path: '/foreman/geometry', element: <><WorkNav /><Geometry /></> },
+  { path: '/foreman/geometry/:floor', element: <><WorkNav /><FloorPage /></> },
+  { path: '/foreman/geometry/:floor/new', element: <RoomPage /> },
+  { path: '/foreman/geometry/:floor/:roomId', element: <RoomPage /> },
   { path: '/foreman/works', element: <><WorkNav /><Works /></> },
   { path: '/foreman/needs', element: <><MatNav /><Needs /></> },
   { path: '/foreman/needs/new', element: <NeedNew /> },

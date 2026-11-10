@@ -1,7 +1,8 @@
 // Pieces shared by the supplier's screens.
 import type { ReactNode } from 'react';
 import { addDays, money, num } from '../../lib/format';
-import type { Data, Purchase } from '../../data/types';
+import type { Tone } from '../../data/select';
+import type { Data, Delivery, Purchase } from '../../data/types';
 
 export const dash: ReactNode = <span className="muted">—</span>;
 /** A quantity without its unit: whole numbers as they are, fractions with one decimal. */
@@ -18,6 +19,15 @@ export const atRisk = (d: Data, p: Purchase): boolean =>
   (p.status === 'new' || p.status === 'sourcing') && p.wantDate <= addDays(d.today, 2);
 /** The wanted date deserves red: the order is not placed in time, or the date passed and the material is not on site. */
 export const wantLate = (d: Data, p: Purchase): boolean => atRisk(d, p) || (p.status !== 'received' && p.wantDate < d.today);
+
+/** A delivery as the supplier reads it. Sending is not receiving: «В пути» stays until the foreman confirms the receipt. */
+export const DELIVERY: Record<Delivery['status'], { label: string; tone: Tone; rank: number }> = {
+  expected: { label: 'В пути', tone: 'hue', rank: 0 },
+  problem: { label: 'Расхождение', tone: 'negative', rank: 1 },
+  received: { label: 'Получено', tone: 'positive', rank: 2 },
+};
+/** The delivery that was created when the supplier shipped the purchase. */
+export const deliveryOf = (d: Data, p: Purchase): Delivery | undefined => d.deliveries.find((x) => x.lines.some((l) => l.partId === p.partId));
 
 /** Two lines that read right both in a table cell and in a phone row title. */
 export function NameCell({ a, b }: { a: ReactNode; b?: ReactNode }) {

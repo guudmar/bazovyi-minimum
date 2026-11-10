@@ -4,14 +4,17 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ChevronRight, FileText } from 'lucide-react';
 import { act, useData } from '../../data/store';
 import {
-  ISSUE_LABEL, WORK_LABEL, WORK_TONE, byId, lineState, objectView, roomFloor, roomVolume, roomWalls, round1, siteStock, sumIn, sumOut,
+  ELEMENT_LABEL, GEO_LABEL, ISSUE_LABEL, METHOD_LABEL, REQUEST_LABEL, WORK_LABEL, WORK_TONE, byId, confirmedGeo, currentGeo, elementArea, floorsOf, lineState, objectView,
+  roomFloor, roomSlopes, roomSurface, roomVolume, roomsOn, round1, siteStock, sumIn, sumOut, totalsOf,
   userName, workDone, workState, workToPresent, type ObjectView, type SiteRow, type Tone,
 } from '../../data/select';
-import { Btn, Card, Chips, DataTable, Empty, Finding, List, Page, Pill, Row, Sheet, Stats, Stepper, Tabs, Track, Two, toast, useWide, type Col } from '../../ui/kit';
+import { AmountInput, Btn, Card, Chips, DataTable, Empty, Field, Finding, List, Page, Pill, Row, Sheet, Stats, Stepper, Tabs, Track, Two, toast, useWide, type Col } from '../../ui/kit';
 import { NoteSheet, OpRow, OpSheet } from '../../shared/money';
-import { count, dFull, dShort, daysBetween, money, moneySigned, num, pct, plural, qty } from '../../lib/format';
+import { addDays, count, dFull, dShort, daysBetween, money, moneySigned, num, pct, plural, qty } from '../../lib/format';
 import type { Avr, AvrLine, BuildObject, Data, GeometryAct, Room, Work } from '../../data/types';
 import { NeedLineBlock, Wrap, dash, dec, n1 } from './rest-bits';
+// the versions of a floor look the same for the foreman who measures and for the economist who checks
+import { GeoPill, VersionList, deltaLine, worstUneven } from '../foreman/geometry';
 
 const share = (part: number, whole: number): string => (whole ? pct(part / whole) : '—');
 const signed = (v: number): ReactNode => <span className={v < 0 ? 'neg' : v > 0 ? 'pos' : 'muted'}>{moneySigned(v)}</span>;
@@ -123,11 +126,12 @@ export function ObjectCard() {
   const tab: TabId = raw && TAB_IDS.includes(raw) ? raw : 'overview';
   const setTab = (t: TabId) => setSp(t === 'overview' ? {} : { tab: t }, { replace: true });
   const review = d.avrs.filter((a) => a.objectId === o.id && a.status === 'review').length;
+  const geoReview = d.geoVersions.filter((v) => v.objectId === o.id && v.status === 'review').length;
   return (
     <Page back="/admin/objects" title={o.name} sub={`${o.stage} · ${o.address} · заказчик ${o.customer}`}>
       <Tabs value={tab} onChange={setTab} tabs={[
         { value: 'overview', label: 'Обзор' },
-        { value: 'geometry', label: 'Геометрия' },
+        { value: 'geometry', label: 'Геометрия', count: geoReview || undefined },
         { value: 'works', label: 'Работы' },
         { value: 'materials', label: 'Материалы' },
         { value: 'avr', label: 'АВР', count: review || undefined },
@@ -232,50 +236,136 @@ function Overview({ o, go }: { o: BuildObject; go: (t: TabId) => void }) {
 }
 
 /* --------------------------------------------------------------- geometry */
+/** Geometry is checked floor by floor: a version on review is confirmed as a whole or returned with a note. */
 function Geometry({ o }: { o: BuildObject }) {
   const d = useData();
   const wide = useWide();
   const [roomId, setRoomId] = useState<string | null>(null);
+  const [returning, setReturning] = useState<string | null>(null);
+  const [history, setHistory] = useState<string | null>(null);
+  const floors = floorsOf(d, o.id);
   const rooms = d.rooms.filter((r) => r.objectId === o.id);
   const acts = d.acts.filter((a) => a.objectId === o.id).sort((a, b) => b.date.localeCompare(a.date) || b.num - a.num);
+  const versions = d.geoVersions.filter((v) => v.objectId === o.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.num - a.num);
+  const firstReview = floors.find((f) => currentGeo(d, o.id, f)?.status === 'review');
+  const back = returning ? currentGeo(d, o.id, returning) : undefined;
   const room = byId(rooms, roomId);
   const dims = (r: Room): string => `${dec(r.length)} × ${dec(r.width)} × ${dec(r.height)}`;
-  const floor = rooms.reduce((s, r) => s + roomFloor(r), 0);
-  const walls = rooms.reduce((s, r) => s + roomWalls(r), 0);
+  const all = totalsOf(rooms);
   const edits = (r: Room): number => Math.max(0, r.history.length - 1);
+  const uneven = (r: Room): number | undefined => worstUneven(r);
   const cols: Col<Room>[] = [
     { head: 'Этаж и помещение', phone: 'title', cell: (r) => (wide ? <Two a={r.name} b={r.floor} /> : `${r.name}, ${r.floor}`) },
     { head: 'Д × Ш × В, м', phone: 'sub', cell: (r) => (wide ? dims(r) : `${dims(r)} м`) },
     { head: 'Пол, м²', num: true, phone: 'value', cell: (r) => (wide ? num(roomFloor(r), 1) : `${num(roomFloor(r), 1)} м²`) },
-    { head: 'Стены, м²', num: true, phone: 'sub', cell: (r) => (wide ? num(roomWalls(r), 1) : `стены ${num(roomWalls(r), 1)} м²`) },
-    { head: 'Отклонение, мм', num: true, phone: 'sub', cell: (r) => (r.deviation === undefined ? (wide ? dash : 'отклонение не замерено') : wide ? num(r.deviation) : `отклонение ${num(r.deviation)} мм`) },
+    { head: 'Стены, м²', num: true, phone: 'sub', cell: (r) => (wide ? num(roomSurface(r, 'walls'), 1) : `стены ${num(roomSurface(r, 'walls'), 1)} м²`) },
+    { head: 'Неровность, мм', num: true, phone: 'sub', cell: (r) => { const mm = uneven(r); return mm === undefined ? (wide ? dash : 'неровности не замерены') : wide ? num(mm) : `неровность ${num(mm)} мм`; } },
     { head: 'Замер', phone: 'meta', cell: (r) => (wide ? <Two a={dShort(r.measuredAt)} b={edits(r) ? count(edits(r), 'правка', 'правки', 'правок') : undefined} /> : dShort(r.measuredAt)) },
   ];
   return (
     <>
-      <Card title="Помещения" note={rooms.length ? `${count(rooms.length, 'помещение', 'помещения', 'помещений')} · пол ${num(floor, 1)} м²` : undefined} flush>
+      {floors.length === 0 && <Card title="Этажи"><Empty>Замеров по объекту ещё нет.</Empty></Card>}
+      {floors.length > 0 && (
+        <div className="grid cols-2">
+          {floors.map((floor) => {
+            const cur = currentGeo(d, o.id, floor);
+            const conf = confirmedGeo(d, o.id, floor);
+            const live = totalsOf(roomsOn(d, o.id, floor));
+            // on review the figures are the ones fixed when the foreman sent the floor
+            const t = cur?.status === 'review' ? cur.totals ?? live : live;
+            return (
+              <Card key={floor} title={floor} note={cur ? `версия ${cur.num}` : undefined} action={<GeoPill v={cur} />}>
+                <div className="stack">
+                  {cur?.status === 'review' && (
+                    <p className="muted">Передал на проверку {cur.by}{cur.sentAt ? `, ${dFull(cur.sentAt)}` : ''}. Акт сформирован на весь этаж, итоги зафиксированы при передаче.</p>
+                  )}
+                  {cur?.status === 'draft' && <p className="muted">Прораб ещё не передал эту версию на проверку.{cur.note ? ` Возвращена с замечанием: ${cur.note}` : ''}</p>}
+                  {cur?.status === 'confirmed' && <p className="muted">{['Подтверждена', cur.confirmedAt ? dFull(cur.confirmedAt) : ''].filter(Boolean).join(' ')}{cur.confirmedBy ? `, ${cur.confirmedBy}` : ''}. Служит основанием для расчётов.</p>}
+                  {!cur && <p className="muted">По этажу ещё нет версии геометрии.</p>}
+                  {cur && cur.status !== 'confirmed' && cur.reason && <p><span className="muted">Причина изменения:</span> {cur.reason}</p>}
+                  <dl className="kv">
+                    <dt>Помещений</dt><dd>{t.rooms}</dd>
+                    <dt>Пол</dt><dd>{dec(t.floor)} м²</dd>
+                    <dt>Стены</dt><dd>{dec(t.walls)} м²</dd>
+                    <dt>Периметр</dt><dd>{dec(t.perimeter)} м</dd>
+                  </dl>
+                  {cur && cur.status !== 'confirmed' && (
+                    <p>
+                      {conf?.totals
+                        ? <><span className="muted">К подтверждённой версии {conf.num}:</span> <span className="num">{deltaLine(t, conf.totals)}</span></>
+                        : 'Подтверждённой версии по этажу нет: расчёты по нему пока недоступны.'}
+                    </p>
+                  )}
+                  {cur?.status === 'review' && (
+                    <>
+                      <div>
+                        <div className="section-title" style={{ margin: '0 0 6px' }}>Что изменилось</div>
+                        {cur.changes.length
+                          ? cur.changes.map((h, i) => <p key={i} style={{ marginBottom: 4 }}><span className="muted">{dShort(h.at)}, {h.by}:</span> {h.text}</p>)
+                          : <p className="muted">Изменений в версии не записано.</p>}
+                      </div>
+                      <div className="btn-row">
+                        <Btn kind={floor === firstReview ? 'primary' : 'secondary'} style={{ flex: '1 1 180px' }}
+                          onClick={() => { act.decideFloor(o.id, floor, true); toast(`${floor}: версия ${cur.num} подтверждена`); }}>Подтвердить версию</Btn>
+                        <Btn style={{ flex: '1 1 180px' }} onClick={() => setReturning(floor)}>Вернуть на доработку</Btn>
+                      </div>
+                    </>
+                  )}
+                  <div><Btn small onClick={() => setHistory(floor)}>История версий</Btn></div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+      <Card title="История версий" note={versions.length ? count(versions.length, 'версия', 'версии', 'версий') : undefined} flush>
+        {versions.length ? (
+          <List>
+            {versions.map((v) => (
+              <Row key={v.id} onClick={() => setHistory(v.floor)} title={`${v.floor}, версия ${v.num}`}
+                sub={`создана ${dFull(v.createdAt)}, ${v.by}${v.confirmedAt ? ` · подтверждена ${dFull(v.confirmedAt)}${v.confirmedBy ? `, ${v.confirmedBy}` : ''}` : ''}${v.reason ? ` · причина: ${v.reason}` : ''}`}
+                side={<GeoPill v={v} />} />
+            ))}
+          </List>
+        ) : <Empty>Версий геометрии по объекту ещё нет.</Empty>}
+      </Card>
+      <Card title="Помещения" note={rooms.length ? `${count(rooms.length, 'помещение', 'помещения', 'помещений')} · пол ${num(all.floor, 1)} м²` : undefined} flush>
         <DataTable cols={cols} rows={rooms} keyOf={(r) => r.id} onRow={(r) => setRoomId(r.id)} empty="Замеров по объекту ещё нет."
-          foot={['Итого', '', num(floor, 1), num(walls, 1), '', '']} />
+          foot={['Итого', '', num(all.floor, 1), num(all.walls, 1), '', '']} />
       </Card>
       <Card title="Акты геометрии" flush>
         {acts.length ? (
           <List>
-            {acts.map((a: GeometryAct) => (
-              <Row key={a.id} title={`Акт геометрии № ${a.num}`} sub={`${dFull(a.date)} · ${a.by}`}
-                value={`${num(a.floorArea, 1)} м²`} meta={count(a.rooms, 'помещение', 'помещения', 'помещений')} />
-            ))}
+            {acts.map((a: GeometryAct) => {
+              const ver = byId(d.geoVersions, a.versionId);
+              return (
+                <Row key={a.id} title={`Акт геометрии № ${a.num}${a.floor ? `, ${a.floor}` : ''}`}
+                  sub={`${dFull(a.date)} · ${a.by}${ver ? ` · версия ${ver.num}, ${GEO_LABEL[ver.status].toLowerCase()}` : ''}`}
+                  value={`${num(a.floorArea, 1)} м²`} meta={count(a.rooms, 'помещение', 'помещения', 'помещений')} />
+              );
+            })}
           </List>
         ) : <Empty>Актов геометрии по объекту ещё нет.</Empty>}
       </Card>
+
+      <NoteSheet open={!!back} title={back ? `Вернуть на доработку: ${back.floor}, версия ${back.num}` : ''} label="Что нужно исправить" action="Вернуть" required
+        onClose={() => setReturning(null)}
+        onSubmit={(note) => { if (back) { act.decideFloor(o.id, back.floor, false, note); toast(`${back.floor}: версия ${back.num} возвращена на доработку`); } setReturning(null); }} />
+      <Sheet open={!!history} wide title={history ? `Версии: ${history}` : ''} onClose={() => setHistory(null)}>
+        {history && <VersionList objectId={o.id} floor={history} />}
+      </Sheet>
       <Sheet open={!!room} title={room ? `${room.name}, ${room.floor}` : ''} onClose={() => setRoomId(null)}>
         {room && (
           <div className="stack" style={{ gap: 16 }}>
             <dl className="kv">
+              <dt>Назначение</dt><dd>{room.purpose ?? dash}</dd>
+              <dt>Способ измерения</dt><dd>{room.method ? METHOD_LABEL[room.method] : dash}</dd>
               <dt>Длина × ширина × высота</dt><dd>{dims(room)} м</dd>
               <dt>Площадь пола</dt><dd>{num(roomFloor(room), 1)} м²</dd>
-              <dt>Площадь стен без проёмов</dt><dd>{num(roomWalls(room), 1)} м²</dd>
+              <dt>Стены без проёмов, с нишами и выступами</dt><dd>{num(roomSurface(room, 'walls'), 1)} м²</dd>
+              <dt>Откосы</dt><dd>{num(roomSlopes(room), 1)} м²</dd>
               <dt>Объём</dt><dd>{num(roomVolume(room), 1)} м³</dd>
-              <dt>Отклонение стен и пола</dt><dd>{room.deviation === undefined ? dash : `${num(room.deviation)} мм`}</dd>
+              <dt>Наибольшая неровность</dt><dd>{uneven(room) === undefined ? dash : `${num(uneven(room) ?? 0)} мм`}</dd>
               <dt>Последний замер</dt><dd>{dFull(room.measuredAt)}, {room.measuredBy}</dd>
               <dt>Фото</dt><dd>{room.photos}</dd>
             </dl>
@@ -289,6 +379,39 @@ function Geometry({ o }: { o: BuildObject }) {
                 </div>
               )) : <p className="muted">Проёмов нет.</p>}
             </div>
+            {(room.elements?.length ?? 0) > 0 && (
+              <div>
+                <div className="section-title" style={{ margin: '0 0 6px' }}>Ниши, выступы и откосы</div>
+                {room.elements?.map((e) => (
+                  <div key={e.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
+                    <span>{e.name} <span className="muted">· {ELEMENT_LABEL[e.kind].toLowerCase()}, {dec(e.length)} × {dec(e.height)} м × {e.count}</span></span>
+                    <span className="num muted nowrap">{num(elementArea(e), 1)} м²</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {(room.zones?.length ?? 0) > 0 && (
+              <div>
+                <div className="section-title" style={{ margin: '0 0 6px' }}>Зоны</div>
+                {room.zones?.map((z) => (
+                  <div key={z.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
+                    <span>{z.name}{z.purpose ? <span className="muted"> · {z.purpose}</span> : null}</span>
+                    <span className="num muted nowrap">{num(z.area, 1)} м²</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {(room.uneven?.length ?? 0) > 0 && (
+              <div>
+                <div className="section-title" style={{ margin: '0 0 6px' }}>Неровности</div>
+                {room.uneven?.map((x) => (
+                  <div key={x.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
+                    <span>{x.place}</span>
+                    <span className="num muted nowrap">{num(x.mm)} мм</span>
+                  </div>
+                ))}
+              </div>
+            )}
             <div>
               <div className="section-title" style={{ margin: '0 0 6px' }}>История изменений</div>
               {[...room.history].reverse().map((h, i) => (
@@ -519,9 +642,46 @@ function AvrCard({ a }: { a: Avr }) {
               <span className="row-main"><span className="muted">{a.status === 'returned' ? 'Причина возврата:' : 'Комментарий:'}</span> {a.note}</span>
             </div>
           )}
+          {a.status === 'accepted' && <AvrPay a={a} />}
         </div>
       )}
     </Card>
+  );
+}
+
+/**
+ * The financial basis of an accepted act. Acceptance does not create a payment by itself:
+ * a person creates the request, and the request then goes through approval like any other.
+ */
+function AvrPay({ a }: { a: Avr }) {
+  const d = useData();
+  const o = byId(d.objects, a.objectId);
+  const tied = d.requests.filter((r) => r.avrId === a.id);
+  const [open, setOpen] = useState(false);
+  const [amount, setAmount] = useState(0);
+  const [due, setDue] = useState(addDays(d.today, 3));
+  const basis = `Оплата работ по АВР № ${a.num}, ${o?.name ?? ''}`;
+  return (
+    <div className="row" style={{ borderTop: '1px solid var(--rule)', flexWrap: 'wrap' }}>
+      <div className="row-main" style={{ flexBasis: 220 }}>
+        <div className="row-title wrap">Финансовое основание</div>
+        <div className="row-sub wrap">
+          {tied.length
+            ? tied.map((r) => `заявка № ${r.num} на ${money(r.amount)}: ${REQUEST_LABEL[r.status].toLowerCase()}`).join('; ')
+            : 'Заявок на оплату по этому акту нет. Приёмка объёмов сама платёж не создаёт.'}
+        </div>
+      </div>
+      <Btn small onClick={() => setOpen(true)}>Создать заявку на оплату</Btn>
+      <Sheet open={open} title={`Заявка на оплату по АВР № ${a.num}`} onClose={() => setOpen(false)} dirty={amount > 0}
+        foot={<><Btn onClick={() => setOpen(false)}>Отмена</Btn><Btn kind="primary" disabled={!amount || !o}
+          onClick={() => { if (o) { act.createRequest({ amount, basis, articleId: 'a-out2', entityId: o.entityId, objectId: o.id, due, avrId: a.id }); toast('Заявка создана и отправлена на согласование'); } setAmount(0); setOpen(false); }}>Создать заявку</Btn></>}>
+        <div className="form">
+          <p className="muted">{basis}. Заявка уйдёт на согласование собственнику. Платёж появится только после согласования и оплаты.</p>
+          <Field label="Сумма"><AmountInput autoFocus value={amount} onChange={setAmount} /></Field>
+          <Field label="Оплатить до"><input className="input" type="date" min={d.today} value={due} onChange={(e) => setDue(e.target.value || due)} /></Field>
+        </div>
+      </Sheet>
+    </div>
   );
 }
 

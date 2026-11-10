@@ -4,11 +4,11 @@ import { useNavigate } from 'react-router-dom';
 import { Search as SearchIcon } from 'lucide-react';
 import { act, useData, useUser } from '../../data/store';
 import { byId, material, objectName, PURCHASE_LABEL, PURCHASE_TONE, REQUEST_LABEL, REQUEST_TONE } from '../../data/select';
-import { Btn, Card, Chips, DataTable, Empty, List, More, Page, Pill, Row, Stats, Two, toast, useWide, type Col } from '../../ui/kit';
+import { Btn, Card, Chips, DataTable, Empty, List, More, Page, Pill, Row, Stats, Two, toast, useSticky, useWide, type Col } from '../../ui/kit';
 import { NoteSheet, RequestCard } from '../../shared/money';
 import { count, dRel, dShort, daysBetween, money, qty } from '../../lib/format';
 import type { Delivery, Material, MoneyRequest, Purchase } from '../../data/types';
-import { NameCell, atRisk, cost, dash, n1, rub, sumCost, wantLate } from './lib';
+import { DELIVERY, NameCell, atRisk, cost, dash, n1, rub, sumCost, wantLate } from './lib';
 import { PurchasePage } from './purchase';
 
 type Status = Purchase['status'];
@@ -105,7 +105,7 @@ function Queue() {
   const d = useData();
   const nav = useNavigate();
   const wide = useWide();
-  const [filter, setFilter] = useState<'all' | Status>('all');
+  const [filter, setFilter] = useSticky<'all' | Status>('supplier.queue.filter', 'all');
   const cnt = (s: Status) => d.purchases.filter((p) => p.status === s).length;
   const rows = d.purchases.filter((p) => filter === 'all' || p.status === filter).sort(byWant);
   const open = cnt('new') + cnt('sourcing');
@@ -252,14 +252,9 @@ function MoneyPage() {
 }
 
 /* ------------------------------------------------------------ deliveries */
-const DELIVERY: Record<Delivery['status'], { label: string; tone: 'hue' | 'positive' | 'negative'; rank: number }> = {
-  expected: { label: 'В пути', tone: 'hue', rank: 0 },
-  problem: { label: 'Расхождение', tone: 'negative', rank: 1 },
-  received: { label: 'Получено', tone: 'positive', rank: 2 },
-};
-
 function Deliveries() {
   const d = useData();
+  const nav = useNavigate();
   const wide = useWide();
   // a delivery belongs here when at least one of its lines carries a part that a purchase was made for
   const bought = new Set(d.purchases.map((p) => p.partId));
@@ -311,7 +306,8 @@ function Deliveries() {
           : rows.length ? 'Все поставки по закупкам получены на объектах.' : 'Поставок по закупкам пока не было.'}
     >
       <Card title="Поставки по закупкам" note={count(rows.length, 'поставка', 'поставки', 'поставок')} flush>
-        <DataTable cols={cols} rows={rows} keyOf={(dl) => dl.id} empty="Поставка появится здесь, когда поставщик отгрузит заказ." />
+        <DataTable cols={cols} rows={rows} keyOf={(dl) => dl.id} empty="Поставка появится здесь, когда поставщик отгрузит заказ."
+          onRow={(dl) => { const pu = d.purchases.find((p) => dl.lines.some((l) => l.partId === p.partId)); if (pu) nav(`/supplier/purchase/${pu.id}`); }} />
       </Card>
     </Page>
   );
@@ -322,7 +318,7 @@ function History() {
   const d = useData();
   const nav = useNavigate();
   const wide = useWide();
-  const [q, setQ] = useState('');
+  const [q, setQ] = useSticky('supplier.history.q', '');
   const s = q.trim().toLowerCase();
   const mat = (p: Purchase): Material => material(d, p.materialId);
   const rows = d.purchases

@@ -1,12 +1,14 @@
 // The trade warehouse and the orders that refill it.
-import { useState } from 'react';
+// Both screens open a record by its address (?open=<id>), so a link from a need lands on the exact position or order.
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Search as SearchIcon } from 'lucide-react';
 import { act, useData } from '../../data/store';
 import { byId, lineStats, material, stockView, type StockView } from '../../data/select';
-import { Btn, Card, Chips, DataTable, Field, Page, Pill, Row, Sheet, Stats, Tabs, Two, toast, useWide, type Col } from '../../ui/kit';
+import { Btn, Card, Chips, DataTable, Field, More, Page, Pill, Row, Sheet, Stats, Tabs, Two, toast, useSticky, useWide, type Col } from '../../ui/kit';
 import { addDays, count, dFull, dRel, dShort, qty } from '../../lib/format';
 import type { Material, TradeOrder } from '../../data/types';
-import { allLines, dash, deficits, n1, needTitle } from './lib';
+import { allLines, dash, deficits, n1, needTitle, orderState } from './lib';
 
 /* ----------------------------------------------------------------- stock */
 interface StockRow { m: Material; v: StockView; lack: number }
@@ -23,7 +25,9 @@ export function MaterialSheet({ id, onClose }: { id: string | null; onClose: () 
   return (
     <Sheet open title={m.name} onClose={onClose}>
       <div className="stack">
-        <p className="muted">{m.group} · {v.place === '—' ? 'на складе не хранится' : v.place}</p>
+        <p className="muted">
+          {[m.code, m.group, m.pack, m.k && m.useUnit ? `1 ${m.unit} = ${qty(m.k, m.useUnit)}` : undefined, v.place === '—' ? 'на складе не хранится' : v.place].filter(Boolean).join(' · ')}
+        </p>
         <Stats items={[
           { label: 'Доступно', value: qty(v.available, m.unit), lead: true, zero: !v.available },
           { label: 'Всего', value: n1(v.total), zero: !v.total },
@@ -45,7 +49,7 @@ export function MaterialSheet({ id, onClose }: { id: string | null; onClose: () 
         {orders.length ? (
           <div className="list" style={{ margin: '0 -16px' }}>
             {orders.map((o) => (
-              <Row key={o.id} to="/manager/orders" title={`Заказ № ${o.num} · ${o.supplier}`}
+              <Row key={o.id} to={`/manager/orders?open=${o.id}`} title={`Заказ № ${o.num} · ${o.supplier}`}
                 sub={<>ждём <span className={o.eta < d.today ? 'neg' : ''}>{dShort(o.eta)}</span>{o.needId ? ` · для № ${byId(d.needs, o.needId)?.num ?? '—'}` : ' · на склад'}</>}
                 value={qty(o.qty, m.unit)} meta={o.status === 'delayed' ? <Pill tone="negative">Задержка</Pill> : undefined} />
             ))}
@@ -71,9 +75,10 @@ export function MaterialSheet({ id, onClose }: { id: string | null; onClose: () 
 export function Stock() {
   const d = useData();
   const wide = useWide();
-  const [q, setQ] = useState('');
-  const [group, setGroup] = useState('all');
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [sp, setSp] = useSearchParams();
+  const [q, setQ] = useSticky('manager.stock.q', '');
+  const [group, setGroup] = useSticky('manager.stock.group', 'all');
+  const openId = sp.get('open');
   const short = deficits(d);
   const all: StockRow[] = d.materials.map((m) => {
     const lack = short.find((x) => x.mat.id === m.id);
@@ -83,13 +88,13 @@ export function Stock() {
   const s = q.trim().toLowerCase();
   const rows = all
     .filter((r) => (group === 'all' || r.m.group === group)
-      && (!s || r.m.name.toLowerCase().includes(s) || r.m.group.toLowerCase().includes(s) || r.v.place.toLowerCase().includes(s)))
+      && (!s || [r.m.name, r.m.group, r.v.place, r.m.code ?? '', r.m.family ?? ''].some((x) => x.toLowerCase().includes(s))))
     .sort((a, b) => a.m.name.localeCompare(b.m.name, 'ru'));
   const out = all.filter((r) => r.v.available === 0).length;
 
   const lackNote = (r: StockRow) => (r.lack > 0 ? <span className="neg">не хватает {qty(r.lack, r.m.unit)}</span> : null);
   const cols: Col<StockRow>[] = wide ? [
-    { head: 'Наименование', cell: (r) => <Two a={r.m.name} b={<>{r.m.group}{r.lack > 0 && <> · {lackNote(r)}</>}</>} /> },
+    { head: 'Наименование', cell: (r) => <Two a={r.m.name} b={<>{r.m.code ? `${r.m.code} · ` : ''}{r.m.group}{r.lack > 0 && <> · {lackNote(r)}</>}</>} /> },
     { head: 'Ед.', cell: (r) => r.m.unit },
     { head: 'Всего', num: true, cell: (r) => n1(r.v.total) },
     { head: 'Резерв', num: true, cell: (r) => n1(r.v.reserved) },
@@ -114,14 +119,14 @@ export function Stock() {
     >
       <div style={{ position: 'relative' }}>
         <SearchIcon size={18} color="var(--muted)" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
-        <input className="input" style={{ paddingLeft: 38 }} type="search" placeholder="Материал, группа или место хранения" value={q}
+        <input className="input" style={{ paddingLeft: 38 }} type="search" placeholder="Материал, код, группа или место хранения" value={q}
           onChange={(e) => setQ(e.target.value)} aria-label="Поиск по складу" />
       </div>
       <Chips value={group} onChange={setGroup} options={[{ value: 'all', label: 'Все группы' }, ...groups.map((g) => ({ value: g, label: g }))]} />
       <Card title="Остатки" note={count(rows.length, 'наименование', 'наименования', 'наименований')} flush>
-        <DataTable cols={cols} rows={rows} keyOf={(r) => r.m.id} onRow={(r) => setOpenId(r.m.id)} empty="По этому запросу материалов нет." />
+        <DataTable cols={cols} rows={rows} keyOf={(r) => r.m.id} onRow={(r) => setSp({ open: r.m.id }, { replace: true })} empty="По этому запросу материалов нет." />
       </Card>
-      <MaterialSheet id={openId} onClose={() => setOpenId(null)} />
+      <MaterialSheet id={openId} onClose={() => setSp({}, { replace: true })} />
     </Page>
   );
 }
@@ -133,6 +138,7 @@ export function OrderSheet({ order: o, onClose }: { order: TradeOrder; onClose: 
   const need = byId(d.needs, o.needId);
   const [eta, setEta] = useState(o.eta < d.today ? addDays(d.today, 2) : o.eta);
   const open = o.status !== 'arrived';
+  const st = orderState(o);
   const arrived = () => {
     act.tradeOrderArrived(o.id);
     toast(need ? `Заказ № ${o.num} поступил и зарезервирован под потребность № ${need.num}` : `Заказ № ${o.num} поступил на склад`);
@@ -159,13 +165,15 @@ export function OrderSheet({ order: o, onClose }: { order: TradeOrder; onClose: 
       <div className="stack">
         <div style={{ fontWeight: 600, fontSize: 16 }}>{m.name}</div>
         <dl className="kv left">
+          <dt>Состояние</dt><dd><Pill tone={st.tone}>{st.label}</Pill></dd>
           <dt>Количество</dt><dd>{qty(o.qty, m.unit)}</dd>
           <dt>Поставщик</dt><dd>{o.supplier}</dd>
           <dt>Заказан</dt><dd>{dFull(o.date)}</dd>
           <dt>{open ? 'Ждём' : 'Срок был'}</dt>
-          <dd><span className={open && o.eta < d.today ? 'neg' : ''}>{dFull(o.eta)}</span>{o.status === 'delayed' && <> <Pill tone="negative">Задержка</Pill></>}</dd>
-          <dt>Для кого</dt><dd>{need ? `потребность ${needTitle(d, need)}` : 'на склад, без привязки к потребности'}</dd>
-          <dt>Состояние</dt><dd>{open ? 'В пути на склад' : 'Поступил на склад'}</dd>
+          <dd><span className={open && o.eta < d.today ? 'neg' : ''}>{dFull(o.eta)}</span></dd>
+          <dt>Для кого</dt>
+          <dd>{need ? <More to={`/manager/needs/${need.id}`}>Потребность {needTitle(d, need)}</More> : 'На склад, без привязки к потребности'}</dd>
+          <dt>Склад</dt><dd><More to={`/manager/stock?open=${m.id}`}>Складская позиция</More></dd>
         </dl>
         {open && (
           <Field label="Новый срок поставки" help={need ? 'Срок части в потребности изменится вместе со сроком заказа.' : undefined}>
@@ -183,13 +191,17 @@ export function OrderSheet({ order: o, onClose }: { order: TradeOrder; onClose: 
 export function Orders() {
   const d = useData();
   const wide = useWide();
-  const [tab, setTab] = useState<'open' | 'arrived'>('open');
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [sp, setSp] = useSearchParams();
+  const [tab, setTab] = useSticky<'open' | 'arrived'>('manager.orders.tab', 'open');
   const open = d.tradeOrders.filter((o) => o.status !== 'arrived').sort((a, b) => a.eta.localeCompare(b.eta));
   const arrived = d.tradeOrders.filter((o) => o.status === 'arrived').sort((a, b) => b.eta.localeCompare(a.eta));
   const delayed = open.filter((o) => o.status === 'delayed');
   const rows = tab === 'open' ? open : arrived;
-  const order = byId(d.tradeOrders, openId);
+  const order = byId(d.tradeOrders, sp.get('open'));
+  // an order opened by a link shows on the tab it belongs to
+  const home = order ? (order.status === 'arrived' ? 'arrived' : 'open') : undefined;
+  const orderId = order?.id;
+  useEffect(() => { if (home) setTab(home); }, [orderId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const whom = (o: TradeOrder) => { const n = byId(d.needs, o.needId); return n ? needTitle(d, n) : 'на склад'; };
   const late = (o: TradeOrder) => o.status !== 'arrived' && o.eta < d.today;
@@ -224,10 +236,10 @@ export function Orders() {
     >
       <Tabs value={tab} onChange={setTab} tabs={[{ value: 'open', label: 'В пути', count: open.length }, { value: 'arrived', label: 'Поступили', count: arrived.length }]} />
       <Card title={tab === 'open' ? 'Ждём на складе' : 'Поступили на склад'} flush>
-        <DataTable cols={cols} rows={rows} keyOf={(o) => o.id} onRow={(o) => setOpenId(o.id)}
+        <DataTable cols={cols} rows={rows} keyOf={(o) => o.id} onRow={(o) => setSp({ open: o.id }, { replace: true })}
           empty={tab === 'open' ? 'Открытых заказов на склад нет.' : 'Поступивших заказов пока нет.'} />
       </Card>
-      {order && <OrderSheet key={order.id} order={order} onClose={() => setOpenId(null)} />}
+      {order && <OrderSheet key={order.id} order={order} onClose={() => setSp({}, { replace: true })} />}
     </Page>
   );
 }
