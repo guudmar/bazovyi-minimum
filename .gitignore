@@ -1,0 +1,6 @@
+node_modules
+dist
+.claude
+.taste-skill
+.DS_Store
+*.local
