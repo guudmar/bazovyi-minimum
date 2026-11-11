@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { ArrowLeftRight } from 'lucide-react';
 import { act, useData, useUser, type OperationInput } from '../data/store';
 import { byId, objectName, registerBalance, userName, REQUEST_LABEL, REQUEST_TONE, forecast, transitAge, type Tone } from '../data/select';
-import { AmountInput, Avatar, Btn, Field, Money, Pill, Row, Seg, Sheet, toast } from '../ui/kit';
+import { AmountInput, Avatar, Btn, Details, Field, Money, Pill, Row, Seg, Sheet, toast } from '../ui/kit';
 import { dFull, dRel, dShort, daysBetween, money } from '../lib/format';
 import type { Data, MoneyRequest, Operation, PlanItem } from '../data/types';
 
@@ -111,7 +111,6 @@ export function OpSheet({ op, onClose, editable }: { op: Operation | null; onClo
             </>
           )}
           <Field label="Комментарий"><input className="input" value={cur.comment ?? ''} onChange={(e) => setDraft({ ...draft, comment: e.target.value })} /></Field>
-          <p className="muted" style={{ fontSize: 13 }}>Прежние значения не пропадут: исправление попадёт в историю операции и в журнал изменений.</p>
         </div>
       )}
     </Sheet>
@@ -134,23 +133,23 @@ export function OperationForm({ open, onClose, registers, defaultRegister }: { o
   const ok = f.amount > 0 && !!f.registerId && (f.kind !== 'transfer' || !!toId);
   const save = () => {
     act.addOperation({ ...f, articleId, toRegisterId: f.kind === 'transfer' ? toId : undefined });
-    toast(f.kind === 'transfer' ? 'Перевод отправлен. Получатель подтвердит получение.' : 'Операция записана');
+    toast(f.kind === 'transfer' ? 'Перевод отправлен' : 'Записано');
     setF(blank);
     onClose();
   };
   return (
-    <Sheet open={open} title="Новая операция" onClose={onClose}
+    <Sheet open={open} title="Записать деньги" onClose={onClose} dirty={f.amount > 0}
       foot={<><Btn onClick={onClose}>Отмена</Btn><Btn kind="primary" disabled={!ok} onClick={save}>Записать</Btn></>}>
       <div className="form">
         <Seg wide value={f.kind} onChange={(kind) => set({ kind })} options={[{ value: 'out', label: 'Расход' }, { value: 'in', label: 'Поступление' }, { value: 'transfer', label: 'Перевод' }]} />
         <Field label="Сумма"><AmountInput autoFocus value={f.amount} onChange={(amount) => set({ amount })} /></Field>
-        <Field label={f.kind === 'in' ? 'Куда поступило' : 'Откуда'} help={<>Сейчас на остатке {money(balance)}{over && <span className="neg">. После операции остаток станет отрицательным.</span>}</>}>
+        <Field label={f.kind === 'in' ? 'Куда' : 'Откуда'} help={over ? <span className="neg">На остатке {money(balance)}, после операции станет меньше нуля.</span> : undefined}>
           <select className="select" value={f.registerId} onChange={(e) => set({ registerId: e.target.value })}>
             {regs.map((r) => <option key={r.id} value={r.id}>{r.name} · {byId(d.entities, r.entityId)?.short}</option>)}
           </select>
         </Field>
         {f.kind === 'transfer' ? (
-          <Field label="Куда" help="Деньги будут числиться «в пути», пока получатель не подтвердит получение.">
+          <Field label="Куда">
             <select className="select" value={toId} onChange={(e) => set({ toRegisterId: e.target.value })}>
               {others.map((r) => <option key={r.id} value={r.id}>{r.name} · {byId(d.entities, r.entityId)?.short}</option>)}
             </select>
@@ -162,18 +161,20 @@ export function OperationForm({ open, onClose, registers, defaultRegister }: { o
                 {arts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
             </Field>
-            <div className="form-2">
-              <Field label="Контрагент"><input className="input" value={f.counterparty} onChange={(e) => set({ counterparty: e.target.value })} placeholder="Кому или от кого" /></Field>
-              <Field label="Объект">
-                <select className="select" value={f.objectId} onChange={(e) => set({ objectId: e.target.value })}>
-                  <option value="">Без объекта</option>
-                  {d.objects.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                </select>
-              </Field>
-            </div>
           </>
         )}
-        <Field label="Комментарий"><input className="input" value={f.comment} onChange={(e) => set({ comment: e.target.value })} placeholder="За что" /></Field>
+        <Field label="За что"><input className="input" value={f.comment} onChange={(e) => set({ comment: e.target.value })} placeholder="Коротко" /></Field>
+        {f.kind !== 'transfer' && (
+          <Details label="Контрагент и объект">
+            <Field label="Контрагент"><input className="input" value={f.counterparty} onChange={(e) => set({ counterparty: e.target.value })} placeholder="Кому или от кого" /></Field>
+            <Field label="Объект">
+              <select className="select" value={f.objectId} onChange={(e) => set({ objectId: e.target.value })}>
+                <option value="">Без объекта</option>
+                {d.objects.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+              </select>
+            </Field>
+          </Details>
+        )}
       </div>
     </Sheet>
   );
@@ -195,6 +196,7 @@ export function RequestCard({ r, children }: { r: MoneyRequest; children?: React
   const fc = forecast(d, Math.max(0, Math.min(30, daysBetween(d.today, r.due))));
   const after = fc[fc.length - 1]?.balance;
   const open = r.status === 'pending' || r.status === 'clarify';
+  const last = r.decisions[r.decisions.length - 1];
   return (
     <section className="card">
       <div className="card-body stack" style={{ gap: 10 }}>
@@ -207,24 +209,24 @@ export function RequestCard({ r, children }: { r: MoneyRequest; children?: React
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }} className="muted">
           <Avatar user={author} small />
-          <span>{author?.name}, {author?.title.toLowerCase()}</span>
+          <span>{author?.name}</span>
+          <span className={due.tone === 'negative' ? 'neg' : ''}>· {due.text}</span>
         </div>
-        <dl className="kv left">
-          <dt>Заявка</dt><dd>№ {r.num} от {dShort(r.date)}</dd>
-          <dt>Срок</dt><dd className={due.tone === 'negative' ? 'neg' : ''}>{due.text}</dd>
-          <dt>Платит</dt><dd>{byId(d.entities, r.entityId)?.name}</dd>
-          <dt>Статья</dt><dd>{byId(d.articles, r.articleId)?.name}</dd>
-          {r.objectId && <><dt>Объект</dt><dd>{objectName(d, r.objectId)}</dd></>}
-          {open && after !== undefined && <><dt>Прогноз</dt><dd>на {dShort(r.due < d.today ? d.today : r.due)} у группы останется {money(after)} с учётом этой заявки</dd></>}
-        </dl>
-        {r.decisions.length > 0 && (
-          <div>
-            {r.decisions.map((x, i) => (
-              <p key={i} style={{ marginTop: 2 }}><span className="muted">{dShort(x.at)}, {x.by}:</span> {x.action}{x.note ? `. ${x.note}` : ''}</p>
-            ))}
-          </div>
-        )}
+        {open && after !== undefined && after < 0 && <p className="neg">После оплаты денег не хватит: прогноз остатка {money(after)}.</p>}
+        {last && <p><span className="muted">{last.by}:</span> {last.action}{last.note ? `. ${last.note}` : ''}</p>}
         {children}
+        <Details>
+          <dl className="kv left">
+            <dt>Заявка</dt><dd>№ {r.num} от {dShort(r.date)}</dd>
+            <dt>Платит</dt><dd>{byId(d.entities, r.entityId)?.name}</dd>
+            <dt>Статья</dt><dd>{byId(d.articles, r.articleId)?.name}</dd>
+            {r.objectId && <><dt>Объект</dt><dd>{objectName(d, r.objectId)}</dd></>}
+            {open && after !== undefined && <><dt>Остаток после</dt><dd>{money(after)} на {dShort(r.due < d.today ? d.today : r.due)}</dd></>}
+          </dl>
+          {r.decisions.length > 1 && r.decisions.map((x, i) => (
+            <p key={i}><span className="muted">{dShort(x.at)}, {x.by}:</span> {x.action}{x.note ? `. ${x.note}` : ''}</p>
+          ))}
+        </Details>
       </div>
     </section>
   );

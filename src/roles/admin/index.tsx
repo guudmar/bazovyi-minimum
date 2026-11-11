@@ -1,84 +1,92 @@
-// The economist and administrator: finance screens. These are the first priority of the product:
-// the money registers, the single registry of operations, transfers on their way and the reconciliation, the planning of money.
+// The economist: «Дела» (everything that needs her now) and «Деньги» (one screen with four tabs:
+// registers, the registry of operations, transfers and the bank, the plan).
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowRight, Plus, Search, SlidersHorizontal } from 'lucide-react';
+import { Plus, Search, SlidersHorizontal } from 'lucide-react';
 import { act, useData, useUser } from '../../data/store';
 import {
-  byArticle, byId, flowOps, forecast, objectView, onHand, registerBalance, registersIn, sumIn, sumOut, tasksFor, transitAge, transits, transitTotal,
-  userName, weeklyFlows, needState, type Scope,
+  byArticle, byId, flowOps, forecast, onHand, registerBalance, registersIn, sumIn, sumOut, tasksFor, transitAge, transits, transitTotal,
+  userName, weeklyFlows, type Scope,
 } from '../../data/select';
 import {
-  AmountInput, Btn, Card, Chips, DataTable, Empty, Field, List, Money, More, Page, Pill, Row, Seg, Sheet, Stats, Tabs, Two, toast, useSticky, useWide, type Col,
+  AmountInput, Btn, Card, Chips, DataTable, Details, Empty, Field, Finding, Go, List, Page, Pill, Row, Seg, Sheet, Stats, Two, toast,
+  useDesktop, useSticky, useWide, type Col,
 } from '../../ui/kit';
 import { BarList, FlowChart, ForecastChart } from '../../ui/charts';
-import { OpAmount, OpRow, OpSheet, OperationForm, opSub, opTitle } from '../../shared/money';
+import { OpAmount, OpSheet, OperationForm, opSub, opTitle } from '../../shared/money';
+import { NewsCard, TodoCard } from '../../shared/common';
 import { CalendarList } from '../owner';
-import { addDays, count, dFull, dRel, dShort, daysBetween, money, pct } from '../../lib/format';
+import { addDays, count, dFull, dRel, dShort, daysBetween, money } from '../../lib/format';
 import type { Operation, Register } from '../../data/types';
+import { StuckCard } from './rest-control';
 import { restRoutes } from './rest';
+
+const PERIODS = [{ value: '7', label: '7 дней' }, { value: '30', label: '30 дней' }, { value: '60', label: '60 дней' }];
 
 /* ------------------------------------------------------------------ home */
 function Home() {
   const d = useData();
   const u = useUser();
   const [form, setForm] = useState(false);
-  const [op, setOp] = useState<Operation | null>(null);
-  const tasks = tasksFor(d, u);
-  const unmatched = d.operations.filter((o) => o.bank === 'unmatched');
-  const toPay = d.requests.filter((r) => r.status === 'approved' || r.status === 'noted');
-  const review = d.avrs.filter((a) => a.status === 'review');
-  const fresh = d.needs.filter((n) => needState(n) === 'new');
-  const last = [...d.operations].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)).slice(0, 5);
-  const urgent = tasks.filter((t) => t.tone === 'negative');
+  const urgent = tasksFor(d, u).filter((t) => t.tone === 'negative').length;
   return (
-    <Page title="Центр управления"
-      sub={tasks.length
-        ? `${count(tasks.length, 'процесс ждёт', 'процесса ждут', 'процессов ждут')} вашего участия${urgent.length ? `, из них ${count(urgent.length, 'срочный', 'срочных', 'срочных')}` : ''}.`
-        : 'Все процессы идут без вашего участия.'}
-      actions={<Btn kind="primary" onClick={() => setForm(true)}><Plus size={18} /> Новая операция</Btn>}>
-      <Stats items={[
-        { label: 'Деньги группы', value: money(onHand(d) + transitTotal(d)), lead: true, hint: `на счетах и в кассах ${money(onHand(d))} · в пути ${money(transitTotal(d))}` },
-        { label: 'Не сопоставлено с банком', value: unmatched.length, zero: !unmatched.length, hint: unmatched.length ? `на ${money(unmatched.reduce((s, o) => s + o.amount, 0))}` : undefined },
-        { label: 'Заявки к оплате', value: toPay.length, zero: !toPay.length, hint: toPay.length ? `на ${money(toPay.reduce((s, r) => s + r.amount, 0))}` : undefined },
-        { label: 'АВР на проверке', value: review.length, zero: !review.length },
-        { label: 'Новые потребности', value: fresh.length, zero: !fresh.length },
-      ]} />
-      <div className="grid cols-2">
-        <Card title="Где нужно ваше участие" action={<More to="/tasks">Все задачи</More>} flush>
-          {tasks.length ? (
-            <List>{tasks.slice(0, 6).map((t) => <Row key={t.id + t.title} to={t.to} wrap title={t.title} sub={t.sub} side={t.tone === 'negative' ? <Pill tone="negative">Срочно</Pill> : undefined} />)}</List>
-          ) : <Empty>Сейчас от вас ничего не требуется.</Empty>}
-        </Card>
-        <Card title="Последние операции" action={<More to="/admin/operations">Все операции</More>} flush>
-          <List>{last.map((o) => <OpRow key={o.id} op={o} onClick={() => setOp(o)} />)}</List>
-        </Card>
-      </div>
-      <div className="grid cols-2">
-        <Card title="Деньги по юридическим лицам" action={<More to="/admin/finance">Финансовый центр</More>} flush>
-          <List>
-            {d.entities.map((e) => (
-              <Row key={e.id} to="/admin/finance" title={e.name} sub={registersIn(d, { entityId: e.id }).map((r) => r.name).join(', ')} value={money(onHand(d, { entityId: e.id }))} money />
-            ))}
-          </List>
-        </Card>
-        <Card title="Объекты" action={<More to="/admin/objects">Управление объектами</More>} flush>
-          <List>
-            {d.objects.map((o) => {
-              const v = objectView(d, o);
-              return <Row key={o.id} to={`/admin/objects/${o.id}`} title={o.name} sub={`${o.stage} · затраты ${money(v.spent)} из ${money(o.planCost)}`} value={pct(v.progress)} meta="выполнено" />;
-            })}
-          </List>
-        </Card>
+    <Page title="Дела" sub={urgent ? `Срочно: ${count(urgent, 'дело', 'дела', 'дел')}` : undefined}
+      actions={<Btn kind="primary" onClick={() => setForm(true)}><Plus size={18} /> Записать деньги</Btn>}>
+      <div className="grid cols-2" style={{ alignItems: 'start' }}>
+        <TodoCard limit={8} />
+        <div className="stack">
+          <StuckCard />
+          <NewsCard />
+        </div>
       </div>
       <OperationForm open={form} onClose={() => setForm(false)} />
-      <OpSheet op={byId(d.operations, op?.id) ?? null} onClose={() => setOp(null)} editable />
     </Page>
   );
 }
 
-/* --------------------------------------------------------- finance center */
-function Finance() {
+/* ----------------------------------------------------------------- money */
+type MoneyTab = 'overview' | 'ops' | 'transfers' | 'plan';
+const MONEY_TABS: { value: MoneyTab; label: string }[] = [
+  { value: 'overview', label: 'Обзор' }, { value: 'ops', label: 'Операции' }, { value: 'transfers', label: 'Переводы' }, { value: 'plan', label: 'План' },
+];
+
+/** The kit's segmented control; on a phone its buttons are narrower, so four tabs fit 375px without cutting a word. */
+function TabSeg<T extends string>({ value, onChange, options }: { value: T; onChange: (v: T) => void; options: { value: T; label: string }[] }) {
+  const desktop = useDesktop();
+  if (desktop) return <div><Seg value={value} onChange={onChange} options={options} /></div>;
+  return (
+    <div className="seg wide" role="group">
+      {options.map((o) => (
+        <button key={o.value} type="button" aria-pressed={o.value === value} onClick={() => onChange(o.value)} style={{ padding: '0 4px' }}>{o.label}</button>
+      ))}
+    </div>
+  );
+}
+
+function Money() {
+  const [sp, setSp] = useSearchParams();
+  const [form, setForm] = useState(false);
+  const tab = MONEY_TABS.find((t) => t.value === sp.get('tab'))?.value ?? 'overview';
+  // the other parameters (?register=) stay: the registry keeps its filter when the person comes back to it
+  const setTab = (t: MoneyTab) => {
+    const q = new URLSearchParams(sp);
+    if (t === 'overview') q.delete('tab'); else q.set('tab', t);
+    setSp(q, { replace: true });
+  };
+  return (
+    <Page title="Деньги" actions={<Btn kind="primary" onClick={() => setForm(true)}><Plus size={18} /> Записать деньги</Btn>}>
+      <TabSeg value={tab} onChange={setTab} options={MONEY_TABS} />
+      {tab === 'overview' && <Overview />}
+      {tab === 'ops' && <Ops />}
+      {tab === 'transfers' && <Transfers />}
+      {tab === 'plan' && <Plan />}
+      <OperationForm open={form} onClose={() => setForm(false)} />
+    </Page>
+  );
+}
+
+/* --------------------------------------------------------------- overview */
+function Overview() {
   const d = useData();
   const nav = useNavigate();
   const [dir, setDir] = useSticky('admin.fin.dir', 'all');
@@ -97,41 +105,53 @@ function Finance() {
   const expenses = byArticle(d, scope, from, d.today, 'out');
   const incomes = byArticle(d, scope, from, d.today, 'in');
   return (
-    <Page title="Финансовый центр" sub={`${count(regs.length, 'денежный регистр', 'денежных регистра', 'денежных регистров')} в ${count(new Set(regs.map((r) => r.entityId)).size, 'юридическом лице', 'юридических лицах', 'юридических лицах')}. Переводы между своими кассами и счетами в обороты не входят.`}>
-      <Chips value={dir} onChange={setDir} options={[{ value: 'all', label: 'Вся группа' }, ...d.directions.map((x) => ({ value: x.id, label: x.name }))]} />
-      <div className="toolbar"><Seg value={days} onChange={setDays} options={[{ value: '7', label: '7 дней' }, { value: '30', label: '30 дней' }, { value: '60', label: '60 дней' }]} /></div>
+    <>
+      {/* one row of filters: what part of the group and for what period */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 8, maxWidth: 480 }}>
+        <select className="select" aria-label="Направление" value={dir} onChange={(e) => setDir(e.target.value)}>
+          <option value="all">Вся группа</option>
+          {d.directions.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+        </select>
+        <select className="select" aria-label="Период" value={days} onChange={(e) => setDays(e.target.value)}>
+          {PERIODS.map((x) => <option key={x.value} value={x.value}>{`За ${x.label}`}</option>)}
+        </select>
+      </div>
       <Stats items={[
-        { label: 'Остаток на счетах и в кассах', value: money(onHand(d, scope)), lead: true, hint: transitTotal(d, scope) ? `ещё ${money(transitTotal(d, scope))} в пути` : 'переводов в пути нет' },
+        { label: 'На счетах и в кассах', value: money(onHand(d, scope)), lead: true, hint: transitTotal(d, scope) ? `ещё ${money(transitTotal(d, scope))} в пути` : undefined },
         { label: `Поступило за ${days} дней`, value: `+${money(sumIn(ops))}` },
         { label: `Потрачено за ${days} дней`, value: money(sumOut(ops)) },
       ]} />
       <Card title="Кассы и счета" flush>
-        <DataTable cols={cols} rows={regs} keyOf={(r) => r.id} onRow={(r) => nav(`/admin/operations?register=${r.id}`)}
+        <DataTable cols={cols} rows={regs} keyOf={(r) => r.id} onRow={(r) => nav(`/admin/money?tab=ops&register=${r.id}`)}
           foot={['Итого', `+${money(sumIn(ops))}`, `−${money(sumOut(ops))}`, money(onHand(d, scope))]} />
       </Card>
       <Card title="Поступления и расходы по неделям" note="8 недель"><FlowChart weeks={weeklyFlows(d, scope, 8)} /></Card>
-      <div className="grid cols-2">
-        <Card title="Расходы по статьям" note={`${days} дней`}>{expenses.length ? <BarList rows={expenses.map((x) => ({ label: x.article.name, value: x.amount }))} /> : <Empty>Расходов за период нет.</Empty>}</Card>
-        <Card title="Поступления по статьям" note={`${days} дней`}>{incomes.length ? <BarList rows={incomes.map((x) => ({ label: x.article.name, value: x.amount }))} /> : <Empty>Поступлений за период нет.</Empty>}</Card>
-      </div>
-    </Page>
+      <Details label="По статьям">
+        <div className="grid cols-2">
+          <Card title="Расходы" note={`${days} дней`}>{expenses.length ? <BarList rows={expenses.map((x) => ({ label: x.article.name, value: x.amount }))} /> : <Empty>Расходов за период нет.</Empty>}</Card>
+          <Card title="Поступления" note={`${days} дней`}>{incomes.length ? <BarList rows={incomes.map((x) => ({ label: x.article.name, value: x.amount }))} /> : <Empty>Поступлений за период нет.</Empty>}</Card>
+        </div>
+      </Details>
+    </>
   );
 }
 
 /* ------------------------------------------------------------- operations */
-function Operations() {
+const NO_FILTER = { entity: '', register: '', article: '', object: '' };
+
+function Ops() {
   const d = useData();
   const wide = useWide();
+  const desktop = useDesktop();
   const [params, setParams] = useSearchParams();
   const [kind, setKind] = useSticky('admin.ops.kind', 'all');
   const [days, setDays] = useSticky('admin.ops.days', '30');
   const [q, setQ] = useSticky('admin.ops.q', '');
-  const [saved, setF] = useSticky('admin.ops.f', { entity: '', register: '', article: '', object: '' });
-  // a link from the finance centre opens the registry already filtered by that register
+  const [saved, setF] = useSticky('admin.ops.f', NO_FILTER);
+  // a link from «Обзор» or an old address opens the registry already filtered by that register
   const linked = params.get('register');
   const f = linked && linked !== saved.register ? { ...saved, entity: '', register: linked } : saved;
   const [filters, setFilters] = useState(false);
-  const [form, setForm] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const from = addDays(d.today, -(Number(days) - 1));
   const s = q.trim().toLowerCase();
@@ -148,11 +168,17 @@ function Operations() {
   const seen = new Map<string, number>();
   for (const o of d.operations) { const k = `${o.date}|${o.kind}|${o.amount}|${o.registerId}|${o.counterparty ?? ''}`; seen.set(k, (seen.get(k) ?? 0) + 1); }
   const dupes = [...seen.values()].filter((n) => n > 1).length;
-  const setFilter = (p: Partial<typeof f>) => { setF({ ...f, ...p }); if ('register' in p) setParams(p.register ? { register: p.register } : {}, { replace: true }); };
+  const linkRegister = (register: string) => {
+    const next = new URLSearchParams(params);
+    if (register) next.set('register', register); else next.delete('register');
+    setParams(next, { replace: true });
+  };
+  const setFilter = (p: Partial<typeof f>) => { setF({ ...f, ...p }); if ('register' in p) linkRegister(p.register ?? ''); };
+  const reset = () => { setF(NO_FILTER); linkRegister(''); };
   const cols: Col<Operation>[] = [
     { head: 'Дата', phone: 'meta', width: '92px', cell: (o) => (wide ? dFull(o.date) : dRel(o.date, d.today)) },
     { head: 'Контрагент и основание', phone: 'title', cell: (o) => (wide ? <Two a={opTitle(d, o)} b={o.comment} /> : opTitle(d, o)) },
-    { head: 'Статья', phone: 'sub', cell: (o) => (o.kind === 'transfer' ? 'Внутренний перевод' : byId(d.articles, o.articleId)?.name ?? '—') },
+    { head: 'Статья', phone: 'sub', cell: (o) => (o.kind === 'transfer' ? 'Перевод между своими' : byId(d.articles, o.articleId)?.name ?? '—') },
     { head: 'Касса или счёт', phone: 'sub', cell: (o) => `${byId(d.registers, o.registerId)?.name}` },
     { head: 'Объект', phone: 'hide', cell: (o) => (o.objectId ? byId(d.objects, o.objectId)?.name : <span className="muted">—</span>) },
     { head: 'Состояние', phone: 'hide', cell: (o) => (o.transit === 'sent' ? <Pill tone="warning">В пути</Pill> : o.bank === 'unmatched' ? <Pill tone="warning">Нет в выписке</Pill> : o.history.length ? <Pill>Исправлена</Pill> : <span className="muted">—</span>) },
@@ -183,167 +209,146 @@ function Operations() {
     </>
   );
   return (
-    <Page title="Денежные операции"
-      sub={`${count(rows.length, 'операция', 'операции', 'операций')} за ${days} дней: поступило ${money(sumIn(rows))}, потрачено ${money(sumOut(rows))}.${dupes ? ` Возможных дублей: ${dupes}.` : ''}`}
-      actions={<Btn kind="primary" onClick={() => setForm(true)}><Plus size={18} /> Новая операция</Btn>}>
+    <>
       <Chips value={kind} onChange={setKind} options={[{ value: 'all', label: 'Все' }, { value: 'in', label: 'Поступления' }, { value: 'out', label: 'Расходы' }, { value: 'transfer', label: 'Переводы' }]} />
-      <div className="toolbar">
+      <div className="toolbar" style={{ marginBottom: 0 }}>
         <div style={{ position: 'relative', flex: '1 1 200px' }}>
           <Search size={18} color="var(--muted)" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
           <input className="input" style={{ paddingLeft: 38, width: '100%' }} type="search" placeholder="Контрагент или комментарий" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск по операциям" />
         </div>
-        <span className="only-desktop"><Seg value={days} onChange={setDays} options={[{ value: '7', label: '7 дней' }, { value: '30', label: '30 дней' }, { value: '60', label: '60 дней' }]} /></span>
-        <Btn onClick={() => setFilters(true)} className="only-phone" aria-label="Фильтры"><SlidersHorizontal size={18} />{active ? ` ${active}` : ''}</Btn>
+        {desktop
+          ? <Seg value={days} onChange={setDays} options={PERIODS} />
+          : <Btn onClick={() => setFilters(true)} aria-label="Фильтры"><SlidersHorizontal size={18} />{active ? ` ${active}` : ''}</Btn>}
       </div>
-      <div className="only-desktop" style={{ display: wide ? 'grid' : 'none', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12 }}>{selects}</div>
-      <Card flush>
+      {desktop && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12 }}>{selects}</div>}
+      {dupes > 0 && <Finding>Возможные дубли: {dupes}. Одинаковые дата, сумма, касса и контрагент.</Finding>}
+      <Card title={count(rows.length, 'операция', 'операции', 'операций')} note={`+${money(sumIn(rows))} · −${money(sumOut(rows))}`} flush>
         <DataTable cols={cols} rows={rows} keyOf={(o) => o.id} onRow={(o) => setOpen(o.id)} empty="По этим условиям операций нет." />
       </Card>
       <Sheet open={filters} title="Фильтры" onClose={() => setFilters(false)}
-        foot={<><Btn onClick={() => { setF({ entity: '', register: '', article: '', object: '' }); setParams({}, { replace: true }); }}>Сбросить</Btn><Btn kind="primary" onClick={() => setFilters(false)}>Показать {rows.length}</Btn></>}>
+        foot={<><Btn onClick={reset}>Сбросить</Btn><Btn kind="primary" onClick={() => setFilters(false)}>Показать {rows.length}</Btn></>}>
         <div className="form">
-          <Field label="Период"><Seg wide value={days} onChange={setDays} options={[{ value: '7', label: '7 дней' }, { value: '30', label: '30 дней' }, { value: '60', label: '60 дней' }]} /></Field>
+          <Field label="Период"><Seg wide value={days} onChange={setDays} options={PERIODS} /></Field>
           {selects}
         </div>
       </Sheet>
-      <OperationForm open={form} onClose={() => setForm(false)} />
       <OpSheet op={byId(d.operations, open) ?? null} onClose={() => setOpen(null)} editable />
-    </Page>
+    </>
   );
 }
 
-/* ------------------------------------------------------------- transits */
-function Transits() {
+/* -------------------------------------------------------------- transfers */
+function Transfers() {
   const d = useData();
-  const [tab, setTab] = useSticky<'way' | 'done' | 'bank'>('admin.tr.tab', 'way');
   const [info, setInfo] = useState(false);
   const way = transits(d);
   const done = d.operations.filter((o) => o.kind === 'transfer' && o.transit === 'received').sort((a, b) => (b.receivedDate ?? '').localeCompare(a.receivedDate ?? ''));
   const unmatched = d.operations.filter((o) => o.bank === 'unmatched').sort((a, b) => b.date.localeCompare(a.date));
   const matched = d.operations.filter((o) => o.bank === 'matched').length;
   const late = way.filter((o) => daysBetween(o.date, d.today) >= 2);
-  const path = (o: Operation) => {
-    const a = byId(d.registers, o.registerId);
-    const b = byId(d.registers, o.toRegisterId);
-    return (
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span><b style={{ fontWeight: 500 }}>{a?.name}</b> <span className="muted">{byId(d.entities, a?.entityId)?.short}</span></span>
-        <ArrowRight size={16} color="var(--muted)" />
-        <span><b style={{ fontWeight: 500 }}>{b?.name}</b> <span className="muted">{byId(d.entities, b?.entityId)?.short}</span></span>
-      </div>
-    );
-  };
   return (
-    <Page title="Транзиты и сверка"
-      sub={late.length ? `${count(late.length, 'перевод', 'перевода', 'переводов')} на ${money(late.reduce((s, o) => s + o.amount, 0))} не подтверждён дольше двух дней.` : way.length ? 'Все переводы в пути отправлены недавно.' : 'Переводов в пути нет.'}>
-      <Stats items={[
-        { label: 'Деньги в пути', value: money(transitTotal(d)), lead: true, zero: !way.length, hint: count(way.length, 'перевод ждёт подтверждения', 'перевода ждут подтверждения', 'переводов ждут подтверждения') },
-        { label: 'Дольше двух дней', value: <span className={late.length ? 'neg' : ''}>{late.length}</span>, zero: !late.length },
-        { label: 'Нет в банковской выписке', value: unmatched.length, zero: !unmatched.length, hint: `сопоставлено ${matched}` },
-      ]} />
-      <Tabs value={tab} onChange={setTab} tabs={[{ value: 'way', label: 'В пути', count: way.length }, { value: 'done', label: 'Подтверждённые', count: done.length }, { value: 'bank', label: 'Сверка с банком', count: unmatched.length }]} />
-      {tab === 'way' && (way.length ? way.map((o, i) => (
-        <Card key={o.id}>
-          <div className="stack" style={{ gap: 10 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline' }}>
-              <span style={{ fontSize: 20, fontWeight: 700 }}><Money v={o.amount} /></span>
-              <span className={daysBetween(o.date, d.today) >= 2 ? 'neg' : 'muted'}>{transitAge(d, o)}</span>
-            </div>
-            {path(o)}
-            <p className="muted">{o.comment} · отправил {userName(d, o.authorId)} {dShort(o.date)}</p>
-            <div><Btn kind={i === 0 ? 'primary' : 'secondary'} onClick={() => { act.confirmTransit(o.id); toast('Получение подтверждено, деньги зачислены'); }}>Подтвердить получение</Btn></div>
-          </div>
-        </Card>
-      )) : <Card><Empty>Все переводы подтверждены получателями.</Empty></Card>)}
-      {tab === 'done' && (
+    <>
+      {late.length > 0 && <Finding>Дольше двух дней не подтверждено: {count(late.length, 'перевод', 'перевода', 'переводов')} на {money(late.reduce((s, o) => s + o.amount, 0))}.</Finding>}
+      <Card title="В пути" note={way.length ? money(transitTotal(d)) : undefined} flush>
+        {way.length ? (
+          <List>
+            {way.map((o) => (
+              <Row key={o.id} wrap title={opTitle(d, o)}
+                sub={<><span className={daysBetween(o.date, d.today) >= 2 ? 'neg' : ''}>{transitAge(d, o)}</span>{` · ${o.comment ? `${o.comment} · ` : ''}отправил ${userName(d, o.authorId)} ${dShort(o.date)}`}</>}
+                value={money(o.amount)} money
+                side={<Btn small onClick={() => { act.confirmTransit(o.id); toast('Получение подтверждено, деньги зачислены'); }}>Подтвердить</Btn>} />
+            ))}
+          </List>
+        ) : <Empty>Все переводы подтверждены получателями.</Empty>}
+      </Card>
+      <Card title="Сверка с банком" note={`сопоставлено ${matched}`} action={<Btn small onClick={() => setInfo(true)}>Загрузить выписку</Btn>} flush>
+        {unmatched.length ? (
+          <List>
+            {unmatched.map((o) => (
+              <Row key={o.id} wrap title={opTitle(d, o)} sub={`${dShort(o.date)} · ${opSub(d, o)}`} value={<OpAmount op={o} />}
+                side={<Btn small onClick={() => { act.matchBank(o.id); toast('Операция сопоставлена с выпиской'); }}>Сопоставить</Btn>} />
+            ))}
+          </List>
+        ) : <Empty>Все операции по счетам есть в выписке.</Empty>}
+      </Card>
+      <Details label={`Подтверждённые переводы: ${done.length}`}>
         <Card flush>
           {done.length ? <List>{done.map((o) => <Row key={o.id} wrap title={opTitle(d, o)} sub={`${o.comment ?? 'Перевод'} · отправлен ${dShort(o.date)}, получен ${dShort(o.receivedDate ?? o.date)}`} value={money(o.amount)} />)}</List> : <Empty>Подтверждённых переводов пока нет.</Empty>}
         </Card>
-      )}
-      {tab === 'bank' && (
-        <>
-          <Card title="Операции, которых нет в выписке" action={<Btn small onClick={() => setInfo(true)}>Загрузить выписку</Btn>} flush>
-            {unmatched.length ? (
-              <List>
-                {unmatched.map((o) => (
-                  <Row key={o.id} wrap title={opTitle(d, o)} sub={`${dShort(o.date)} · ${opSub(d, o)}`} value={<OpAmount op={o} />}
-                    side={<Btn small onClick={() => { act.matchBank(o.id); toast('Операция сопоставлена с выпиской'); }}>Сопоставить</Btn>} />
-                ))}
-              </List>
-            ) : <Empty>Все операции по банковским счетам сопоставлены с выпиской.</Empty>}
-          </Card>
-          <p className="muted" style={{ fontSize: 13 }}>Сопоставлено с выпиской: {matched}. Операции по наличным кассам с банком не сверяются.</p>
-        </>
-      )}
+      </Details>
       <Sheet open={info} title="Загрузка выписки" onClose={() => setInfo(false)} foot={<Btn kind="primary" onClick={() => setInfo(false)}>Понятно</Btn>}>
-        <p>В демо-версии выписка из банка не загружается. В рабочей версии здесь будет импорт файла из банка: операции сопоставятся сами, а расхождения и возможные дубли останутся в этом списке.</p>
+        <p>В демо выписка не загружается. В рабочей версии файл из банка сопоставится сам, а расхождения останутся в списке «Сверка с банком».</p>
       </Sheet>
-    </Page>
+    </>
   );
 }
 
-/* --------------------------------------------------------------- planning */
-function Planning() {
+/* ------------------------------------------------------------------- plan */
+function Plan() {
   const d = useData();
   const horizon = 14;
   const fc = forecast(d, horizon);
   const low = fc.reduce((a, b) => (b.balance < a.balance ? b : a), fc[0]);
+  const end = fc[fc.length - 1].balance;
   const items = d.plan.filter((p) => p.status !== 'paid' && p.date <= addDays(d.today, horizon)).sort((a, b) => a.date.localeCompare(b.date));
   const paid = d.plan.filter((p) => p.status === 'paid');
   const [form, setForm] = useState(false);
+  return (
+    <>
+      {low.balance < 0 && <Finding>Кассовый разрыв {dShort(low.date)}: по плану не хватит {money(-low.balance)}.</Finding>}
+      <div className="grid split-even">
+        <Card title={`Остаток на ${horizon} дней`} note={<>через {horizon} дней <span className={end < 0 ? 'neg' : ''}>{money(end)}</span></>}><ForecastChart days={fc} /></Card>
+        <Card title="Платежи и поступления" action={<Btn small onClick={() => setForm(true)}><Plus size={16} /> Плановый платёж</Btn>} flush><CalendarList items={items} /></Card>
+      </div>
+      <Details label={`Оплачено по плану: ${paid.length}`}>
+        <Card flush>
+          {paid.length
+            ? <List>{paid.map((p) => <Row key={p.id} title={p.title} sub={`оплачено ${dShort(p.date)} · ${byId(d.entities, p.entityId)?.short}`} value={`−${money(p.amount)}`} />)}</List>
+            : <Empty>Оплаченных плановых платежей пока нет.</Empty>}
+        </Card>
+      </Details>
+      <PlanForm open={form} onClose={() => setForm(false)} />
+    </>
+  );
+}
+
+function PlanForm({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const d = useData();
   const blank = { date: addDays(d.today, 3), flow: 'out' as 'in' | 'out', amount: 0, title: '', entityId: d.entities[0].id, regular: false };
   const [f, setF] = useState(blank);
-  const incoming = items.filter((p) => p.flow === 'in').reduce((s, p) => s + p.amount, 0);
-  const outgoing = items.filter((p) => p.flow === 'out').reduce((s, p) => s + p.amount, 0);
   return (
-    <Page title="Планирование денег"
-      sub={low.balance < 0 ? `Кассовый разрыв ${dShort(low.date)}: по плану не хватит ${money(-low.balance)}.` : `Разрыва на ${horizon} дней по плану нет. Самый низкий остаток ${dShort(low.date)}: ${money(low.balance)}.`}
-      actions={<Btn kind="primary" onClick={() => setForm(true)}><Plus size={18} /> Плановый платёж</Btn>}>
-      <Stats items={[
-        { label: 'Деньги сейчас', value: money(onHand(d) + transitTotal(d)), lead: true, hint: 'на счетах, в кассах и в пути' },
-        { label: `Плановые поступления, ${horizon} дней`, value: `+${money(incoming)}` },
-        { label: `Плановые платежи, ${horizon} дней`, value: money(outgoing) },
-        { label: `Остаток через ${horizon} дней`, value: money(fc[fc.length - 1].balance) },
-      ]} />
-      <div className="grid split-even">
-        <Card title={`Прогноз остатка на ${horizon} дней`} note="план, не факт"><ForecastChart days={fc} /></Card>
-        <Card title="Платежи и поступления по дням" flush><CalendarList items={items} /></Card>
-      </div>
-      <Card title="План и факт" note="оплаченные заявки" flush>
-        {paid.length ? (
-          <List>{paid.map((p) => <Row key={p.id} title={p.title} sub={`оплачено ${dShort(p.date)} · ${byId(d.entities, p.entityId)?.short}`} value={`−${money(p.amount)}`} />)}</List>
-        ) : <Empty>Оплаченных плановых платежей пока нет. Они появятся здесь после оплаты согласованных заявок.</Empty>}
-      </Card>
-      <Sheet open={form} title="Плановый платёж или поступление" onClose={() => setForm(false)}
-        foot={<><Btn onClick={() => setForm(false)}>Отмена</Btn><Btn kind="primary" disabled={!f.amount || !f.title.trim()}
-          onClick={() => { act.addPlanItem({ ...f, title: f.title.trim(), regular: f.regular || undefined }); setF(blank); setForm(false); toast('Добавлено в платёжный календарь'); }}>Добавить</Btn></>}>
-        <div className="form">
-          <Seg wide value={f.flow} onChange={(flow) => setF({ ...f, flow })} options={[{ value: 'out', label: 'Платёж' }, { value: 'in', label: 'Поступление' }]} />
-          <Field label="Сумма"><AmountInput autoFocus value={f.amount} onChange={(amount) => setF({ ...f, amount })} /></Field>
-          <Field label="Название"><input className="input" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} placeholder="За что или от кого" /></Field>
-          <div className="form-2">
-            <Field label="Дата"><input className="input" type="date" min={d.today} value={f.date} onChange={(e) => setF({ ...f, date: e.target.value || blank.date })} /></Field>
-            <Field label="Юридическое лицо">
-              <select className="select" value={f.entityId} onChange={(e) => setF({ ...f, entityId: e.target.value })}>
-                {d.entities.map((x) => <option key={x.id} value={x.id}>{x.short}</option>)}
-              </select>
-            </Field>
-          </div>
+    <Sheet open={open} title="Плановый платёж или поступление" onClose={onClose} dirty={f.amount > 0 || !!f.title.trim()}
+      foot={<><Btn onClick={onClose}>Отмена</Btn><Btn kind="primary" disabled={!f.amount || !f.title.trim()}
+        onClick={() => { act.addPlanItem({ ...f, title: f.title.trim(), regular: f.regular || undefined }); setF(blank); onClose(); toast('Добавлено в план'); }}>Добавить</Btn></>}>
+      <div className="form">
+        <Seg wide value={f.flow} onChange={(flow) => setF({ ...f, flow })} options={[{ value: 'out', label: 'Платёж' }, { value: 'in', label: 'Поступление' }]} />
+        <Field label="Сумма"><AmountInput autoFocus value={f.amount} onChange={(amount) => setF({ ...f, amount })} /></Field>
+        <Field label="Название"><input className="input" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} placeholder="За что или от кого" /></Field>
+        <Field label="Дата"><input className="input" type="date" min={d.today} value={f.date} onChange={(e) => setF({ ...f, date: e.target.value || blank.date })} /></Field>
+        <Details label="Юрлицо и повтор">
+          <Field label="Юридическое лицо">
+            <select className="select" value={f.entityId} onChange={(e) => setF({ ...f, entityId: e.target.value })}>
+              {d.entities.map((x) => <option key={x.id} value={x.id}>{x.short}</option>)}
+            </select>
+          </Field>
           <label style={{ display: 'flex', gap: 10, alignItems: 'center', minHeight: 44 }}>
             <input type="checkbox" checked={f.regular} onChange={(e) => setF({ ...f, regular: e.target.checked })} style={{ width: 20, height: 20 }} />
             <span>Регулярный платёж</span>
           </label>
-        </div>
-      </Sheet>
-    </Page>
+        </Details>
+      </div>
+    </Sheet>
   );
 }
 
 export const routes = [
   { path: '/admin', element: <Home /> },
-  { path: '/admin/finance', element: <Finance /> },
-  { path: '/admin/operations', element: <Operations /> },
-  { path: '/admin/transits', element: <Transits /> },
-  { path: '/admin/planning', element: <Planning /> },
+  { path: '/admin/money', element: <Money /> },
+  // old addresses: the four money screens are now tabs of «Деньги», «Контроль процессов» is the card «Застряло» in «Дела»
+  { path: '/admin/finance', element: <Go to="/admin/money" add={{ tab: 'overview' }} /> },
+  { path: '/admin/operations', element: <Go to="/admin/money" add={{ tab: 'ops' }} /> },
+  { path: '/admin/transits', element: <Go to="/admin/money" add={{ tab: 'transfers' }} /> },
+  { path: '/admin/planning', element: <Go to="/admin/money" add={{ tab: 'plan' }} /> },
+  { path: '/admin/processes', element: <Go to="/admin" /> },
   ...restRoutes,
 ];

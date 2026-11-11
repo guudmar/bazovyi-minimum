@@ -1,9 +1,10 @@
-// «Центр заявок»: the money requests the economist pays, and the needs in materials she watches without routing them.
+// «Заявки»: the money requests the economist pays, and the requests for materials she watches without deciding where they come from.
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { Plus } from 'lucide-react';
 import { act, useData, useUser } from '../../data/store';
 import { NEED_LABEL, NEED_TONE, byId, needProgress, needState, objectName, registerBalance, userName } from '../../data/select';
-import { AmountInput, Btn, Card, Chips, DataTable, Empty, Field, LinkBtn, Money, Page, Pill, Sheet, Tabs, Two, toast, useWide, type Col } from '../../ui/kit';
+import { AmountInput, Btn, Card, Chips, DataTable, Details, Empty, Field, LinkBtn, Money, Page, Pill, Sheet, Tabs, Two, toast, useWide, type Col } from '../../ui/kit';
 import { NoteSheet, RequestCard, dueLabel } from '../../shared/money';
 import { addDays, count, dFull, dShort, money, pct } from '../../lib/format';
 import type { MoneyRequest, Need, RequestStatus } from '../../data/types';
@@ -14,8 +15,8 @@ type Filter = 'all' | 'topay' | 'pending' | 'clarify' | 'paid' | 'rejected';
 const FILTERS: { value: Filter; label: string; has: (s: RequestStatus) => boolean }[] = [
   { value: 'all', label: 'Все', has: () => true },
   { value: 'topay', label: 'К оплате', has: (s) => s === 'approved' || s === 'noted' },
-  { value: 'pending', label: 'На согласовании', has: (s) => s === 'pending' },
-  { value: 'clarify', label: 'Нужно уточнение', has: (s) => s === 'clarify' },
+  { value: 'pending', label: 'Ждёт решения', has: (s) => s === 'pending' },
+  { value: 'clarify', label: 'Нужен ответ', has: (s) => s === 'clarify' },
   { value: 'paid', label: 'Оплачены', has: (s) => s === 'paid' },
   { value: 'rejected', label: 'Отклонены', has: (s) => s === 'rejected' },
 ];
@@ -33,22 +34,24 @@ export function Requests() {
   const [payId, setPayId] = useState<string | null>(null);
   const [answerId, setAnswerId] = useState<string | null>(null);
   const [form, setForm] = useState(false);
-  const [needId, setNeedId] = useState<string | null>(null);
 
   const toPay = d.requests.filter(canPay);
   const has = FILTERS.find((f) => f.value === filter)?.has ?? (() => true);
   const shown = d.requests
     .filter((r) => has(r.status))
     .sort((a, b) => rank(a) - rank(b) || (rank(a) < 3 ? a.due.localeCompare(b.due) : b.date.localeCompare(a.date)));
+  const firstToPay = shown.find(canPay)?.id;
   const paying = byId(d.requests, payId);
   const answering = byId(d.requests, answerId);
   const needs = [...d.needs].sort((a, b) => b.date.localeCompare(a.date) || b.num - a.num);
-  const need = byId(d.needs, needId);
+  // a request for materials opens straight from a link (?open=), e.g. from «Застряло» on «Дела»
+  const need = tab === 'tmc' ? byId(d.needs, sp.get('open')) : undefined;
+  const openNeed = (id: string | null) => setSp(id ? { tab: 'tmc', open: id } : { tab: 'tmc' }, { replace: true });
   const fresh = d.needs.filter((n) => needState(n) === 'new').length;
 
   const needCols: Col<Need>[] = [
     { head: '№ и объект', phone: 'title', cell: (n) => (wide ? <Two a={`№ ${n.num}${n.urgent ? ' · срочная' : ''}`} b={objectName(d, n.objectId)} /> : `№ ${n.num} · ${objectName(d, n.objectId)}`) },
-    { head: 'Инициатор', phone: 'sub', cell: (n) => userName(d, n.authorId) },
+    { head: 'Прораб', phone: 'sub', cell: (n) => userName(d, n.authorId) },
     { head: 'Дата', phone: 'sub', cell: (n) => dShort(n.date) },
     { head: 'Позиции', num: true, phone: 'sub', cell: (n) => (wide ? n.lines.length : `${count(n.lines.length, 'позиция', 'позиции', 'позиций')}${n.urgent ? ' · срочная' : ''}`) },
     { head: 'Состояние', phone: 'meta', cell: (n) => { const s = needState(n); return <Pill tone={NEED_TONE[s]}>{NEED_LABEL[s]}</Pill>; } },
@@ -56,30 +59,28 @@ export function Requests() {
   ];
 
   return (
-    <Page title="Центр заявок"
-      sub={toPay.length
-        ? `${count(toPay.length, 'согласованная заявка ждёт', 'согласованные заявки ждут', 'согласованных заявок ждут')} оплаты на ${money(toPay.reduce((s, r) => s + r.amount, 0))}.`
-        : 'Согласованных заявок, которые ждут оплаты, нет.'}
-      actions={<Btn onClick={() => setForm(true)}>Новая заявка</Btn>}>
+    <Page title="Заявки"
+      sub={toPay.length ? `К оплате: ${count(toPay.length, 'заявка', 'заявки', 'заявок')} на ${money(toPay.reduce((s, r) => s + r.amount, 0))}` : undefined}
+      actions={<Btn onClick={() => setForm(true)}><Plus size={18} /> Новая заявка</Btn>}>
       <Tabs value={tab} onChange={(t) => setSp(t === 'tmc' ? { tab: 'tmc' } : {}, { replace: true })}
-        tabs={[{ value: 'money', label: 'Деньги', count: d.requests.length }, { value: 'tmc', label: 'ТМЦ', count: d.needs.length }]} />
+        tabs={[{ value: 'money', label: 'Деньги', count: d.requests.length }, { value: 'tmc', label: 'Материалы', count: d.needs.length }]} />
 
       {tab === 'money' && (
         <>
           <Chips value={filter} onChange={setFilter}
             options={FILTERS.map((f) => ({ value: f.value, label: f.label, count: d.requests.filter((r) => f.has(r.status)).length }))} />
           {shown.length === 0 && (
-            <Card title="Заявки на деньги">
-              <Empty>{filter === 'topay' ? 'Согласованных заявок, которые ждут оплаты, нет.' : filter === 'all' ? 'Заявок на деньги пока нет.' : 'Заявок в этом состоянии нет.'}</Empty>
+            <Card>
+              <Empty>{filter === 'topay' ? 'Оплачивать сейчас нечего.' : filter === 'all' ? 'Заявок на деньги пока нет.' : 'Таких заявок нет.'}</Empty>
             </Card>
           )}
           <div className="grid cols-2">
             {shown.map((r) => (
               <RequestCard key={r.id} r={r}>
-                {canPay(r) && <Btn kind="primary" block style={{ marginTop: 4 }} onClick={() => setPayId(r.id)}>Оплатить {money(r.amount)}</Btn>}
+                {canPay(r) && <Btn kind={r.id === firstToPay ? 'primary' : 'secondary'} block style={{ marginTop: 4 }} onClick={() => setPayId(r.id)}>Оплатить {money(r.amount)}</Btn>}
                 {r.status === 'clarify' && (r.authorId === me.id
                   ? <Btn block style={{ marginTop: 4 }} onClick={() => setAnswerId(r.id)}>Ответить</Btn>
-                  : <p className="muted" style={{ fontSize: 13 }}>Ответить на уточнение должен автор заявки: {userName(d, r.authorId)}.</p>)}
+                  : <p className="muted" style={{ fontSize: 13 }}>Отвечает автор: {userName(d, r.authorId)}.</p>)}
               </RequestCard>
             ))}
           </div>
@@ -87,20 +88,20 @@ export function Requests() {
       )}
 
       {tab === 'tmc' && (
-        <Card title="Потребности в материалах" note={fresh ? `${count(fresh, 'новая', 'новые', 'новых')} без маршрута` : 'все взяты в работу'} flush>
-          <DataTable cols={needCols} rows={needs} keyOf={(n) => n.id} onRow={(n) => setNeedId(n.id)} empty="Потребностей в материалах пока нет." />
+        <Card title="Заявки на материалы" note={fresh ? `ждут менеджера: ${fresh}` : undefined} flush>
+          <DataTable cols={needCols} rows={needs} keyOf={(n) => n.id} onRow={(n) => openNeed(n.id)} empty="Заявок на материалы пока нет." />
         </Card>
       )}
 
       {paying && canPay(paying) && <PaySheet key={paying.id} r={paying} onClose={() => setPayId(null)} />}
-      <NoteSheet open={!!answering} title={answering ? `Ответ по заявке № ${answering.num}` : ''} label="Ваш ответ на вопрос" action="Отправить" required
+      <NoteSheet open={!!answering} title={answering ? `Ответ по заявке № ${answering.num}` : ''} label="Ваш ответ" action="Отправить" required
         onClose={() => setAnswerId(null)}
         onSubmit={(text) => {
           if (answering) { act.answerRequest(answering.id, text); toast(`Ответ отправлен. Заявка № ${answering.num} снова на согласовании`); }
           setAnswerId(null);
         }} />
       <NewRequestSheet open={form} onClose={() => setForm(false)} />
-      <Sheet open={!!need} wide title={need ? `Потребность № ${need.num}` : ''} onClose={() => setNeedId(null)}
+      <Sheet open={!!need} wide title={need ? `Заявка на материалы № ${need.num}` : ''} onClose={() => openNeed(null)}
         foot={need && <LinkBtn to={`/admin/objects/${need.objectId}?tab=materials`}>Материалы объекта</LinkBtn>}>
         {need && <NeedDetails need={need} />}
       </Sheet>
@@ -128,13 +129,8 @@ function PaySheet({ r, onClose }: { r: MoneyRequest; onClose: () => void }) {
         <div>
           <div style={{ fontSize: 28, lineHeight: '34px', fontWeight: 700 }}><Money v={r.amount} /></div>
           <div style={{ marginTop: 2 }}>{r.basis}</div>
+          <div className={due.tone === 'negative' ? 'neg' : 'muted'} style={{ marginTop: 2 }}>{due.text}</div>
         </div>
-        <dl className="kv left">
-          <dt>Платит</dt><dd>{byId(d.entities, r.entityId)?.name ?? '—'}</dd>
-          <dt>Статья</dt><dd>{byId(d.articles, r.articleId)?.name ?? '—'}</dd>
-          {r.objectId && <><dt>Объект</dt><dd>{objectName(d, r.objectId)}</dd></>}
-          <dt>Срок</dt><dd className={due.tone === 'negative' ? 'neg' : ''}>{due.text}</dd>
-        </dl>
         <div>
           <div className="section-title" style={{ margin: '0 0 2px' }}>Откуда оплатить</div>
           {regs.length ? (
@@ -148,7 +144,7 @@ function PaySheet({ r, onClose }: { r: MoneyRequest; onClose: () => void }) {
                       style={{ width: 18, height: 18, margin: 0, flex: 'none', accentColor: 'var(--primary)' }} />
                     <div className="row-main">
                       <div className="row-title">{x.name}</div>
-                      <div className="row-sub">{x.kind === 'bank' ? 'Банковский счёт' : 'Наличная касса'}</div>
+                      <div className="row-sub">{x.kind === 'bank' ? 'Счёт' : 'Касса'}</div>
                     </div>
                     <div className="row-side">
                       <div className="row-value">{money(balance)}</div>
@@ -158,9 +154,15 @@ function PaySheet({ r, onClose }: { r: MoneyRequest; onClose: () => void }) {
                 );
               })}
             </div>
-          ) : <p className="muted">У этого юрлица нет касс и счетов, оплатить заявку неоткуда.</p>}
+          ) : <p className="neg">У этого юрлица нет касс и счетов: оплатить неоткуда.</p>}
         </div>
-        <p className="muted" style={{ fontSize: 13 }}>Оплата запишется расходом на сегодня и останется в истории заявки.</p>
+        <Details>
+          <dl className="kv left">
+            <dt>Платит</dt><dd>{byId(d.entities, r.entityId)?.name ?? '—'}</dd>
+            <dt>Статья</dt><dd>{byId(d.articles, r.articleId)?.name ?? '—'}</dd>
+            {r.objectId && <><dt>Объект</dt><dd>{objectName(d, r.objectId)}</dd></>}
+          </dl>
+        </Details>
       </div>
     </Sheet>
   );
@@ -180,39 +182,41 @@ function NewRequestSheet({ open, onClose }: { open: boolean; onClose: () => void
     onClose();
   };
   return (
-    <Sheet open={open} title="Новая заявка на деньги" onClose={onClose}
+    <Sheet open={open} title="Новая заявка на деньги" onClose={onClose} dirty={f.amount > 0 || !!f.basis.trim()}
       foot={<><Btn onClick={onClose}>Отмена</Btn><Btn kind="primary" disabled={!ok} onClick={save}>Отправить на согласование</Btn></>}>
       <div className="form">
         <Field label="Сумма"><AmountInput autoFocus value={f.amount} onChange={(amount) => set({ amount })} /></Field>
-        <Field label="Основание"><input className="input" value={f.basis} onChange={(e) => set({ basis: e.target.value })} placeholder="За что платим" /></Field>
+        <Field label="За что"><input className="input" value={f.basis} onChange={(e) => set({ basis: e.target.value })} placeholder="Коротко" /></Field>
         <div className="form-2">
           <Field label="Статья">
             <select className="select" value={f.articleId} onChange={(e) => set({ articleId: e.target.value })}>
               {arts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           </Field>
-          <Field label="Срок оплаты">
+          <Field label="Оплатить до">
             <input className="input" type="date" min={d.today} value={f.due} onChange={(e) => set({ due: e.target.value })} />
           </Field>
         </div>
-        <Field label="Объект" help="Не обязательно. Юрлицо подставится из объекта.">
-          <select className="select" value={f.objectId}
-            onChange={(e) => set({ objectId: e.target.value, entityId: byId(d.objects, e.target.value)?.entityId ?? f.entityId })}>
-            <option value="">Без объекта</option>
-            {d.objects.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-          </select>
-        </Field>
-        <Field label="Юрлицо, которое платит">
-          <select className="select" value={f.entityId} onChange={(e) => set({ entityId: e.target.value })}>
-            {d.entities.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-          </select>
-        </Field>
+        <Details label="Объект и юрлицо">
+          <Field label="Объект">
+            <select className="select" value={f.objectId}
+              onChange={(e) => set({ objectId: e.target.value, entityId: byId(d.objects, e.target.value)?.entityId ?? f.entityId })}>
+              <option value="">Без объекта</option>
+              {d.objects.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Кто платит">
+            <select className="select" value={f.entityId} onChange={(e) => set({ entityId: e.target.value })}>
+              {d.entities.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+            </select>
+          </Field>
+        </Details>
       </div>
     </Sheet>
   );
 }
 
-/** A need as the economist sees it: whole, with every part of every position, and nothing to edit. */
+/** A request for materials as the economist sees it: whole, with every part of every position, and nothing to edit. */
 function NeedDetails({ need }: { need: Need }) {
   const d = useData();
   const st = needState(need);
@@ -220,7 +224,7 @@ function NeedDetails({ need }: { need: Need }) {
     <div className="stack" style={{ gap: 16 }}>
       <dl className="kv left">
         <dt>Объект</dt><dd>{objectName(d, need.objectId)}</dd>
-        <dt>Инициатор</dt><dd>{userName(d, need.authorId)}</dd>
+        <dt>Прораб</dt><dd>{userName(d, need.authorId)}</dd>
         <dt>Дата</dt><dd>{dFull(need.date)}{need.urgent ? ', срочная' : ''}</dd>
         <dt>Состояние</dt><dd><Pill tone={NEED_TONE[st]}>{NEED_LABEL[st]}</Pill> <span className="muted">· обеспечено {pct(needProgress(need))}</span></dd>
         {need.comment && <><dt>Комментарий</dt><dd>{need.comment}</dd></>}
@@ -238,9 +242,6 @@ function NeedDetails({ need }: { need: Need }) {
           <NeedLineBlock line={l} legend parts caption={`Нужно к ${dShort(l.wantDate)}${l.comment ? ` · ${l.comment}` : ''}`} />
         </div>
       ))}
-      <p className="muted" style={{ fontSize: 13 }}>
-        Маршруты назначает менеджер торгового направления. Каждая часть позиции остаётся привязанной к этой потребности.
-      </p>
     </div>
   );
 }

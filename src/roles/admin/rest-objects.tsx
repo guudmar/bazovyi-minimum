@@ -1,14 +1,16 @@
-// «Управление объектами» and the project card: what was agreed, what is built, what it costs and what waits for the economist.
+// «Объекты» and the card of one object. Each tab shows the main thing first; the rest is under «Подробнее».
 import { useState, type ReactNode } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { ChevronRight, FileText } from 'lucide-react';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { act, useData } from '../../data/store';
 import {
-  ELEMENT_LABEL, GEO_LABEL, ISSUE_LABEL, METHOD_LABEL, REQUEST_LABEL, WORK_LABEL, WORK_TONE, byId, confirmedGeo, currentGeo, elementArea, floorsOf, lineState, objectView,
-  roomFloor, roomSlopes, roomSurface, roomVolume, roomsOn, round1, siteStock, sumIn, sumOut, totalsOf,
+  ELEMENT_LABEL, ISSUE_LABEL, METHOD_LABEL, REQUEST_LABEL, REQUEST_TONE, WORK_LABEL, WORK_TONE, byId, confirmedGeo, currentGeo, elementArea, floorsOf, lineState,
+  objectView, roomFloor, roomSlopes, roomSurface, roomVolume, roomsOn, round1, siteStock, sumIn, sumOut, totalsOf,
   userName, workDone, workState, workToPresent, type ObjectView, type SiteRow, type Tone,
 } from '../../data/select';
-import { AmountInput, Btn, Card, Chips, DataTable, Empty, Field, Finding, List, Page, Pill, Row, Sheet, Stats, Stepper, Tabs, Track, Two, toast, useWide, type Col } from '../../ui/kit';
+import {
+  AmountInput, Btn, Card, Chips, DataTable, Details, Empty, Field, List, Page, Pill, Row, Sheet, Stats, Status, Stepper, Tabs, Two, toast, useWide,
+  type Col, type StatusKind,
+} from '../../ui/kit';
 import { NoteSheet, OpRow, OpSheet } from '../../shared/money';
 import { addDays, count, dFull, dShort, daysBetween, money, moneySigned, num, pct, plural, qty } from '../../lib/format';
 import type { Avr, AvrLine, BuildObject, Data, GeometryAct, Room, Work } from '../../data/types';
@@ -16,92 +18,41 @@ import { NeedLineBlock, Wrap, dash, dec, n1 } from './rest-bits';
 // the versions of a floor look the same for the foreman who measures and for the economist who checks
 import { GeoPill, VersionList, deltaLine, worstUneven } from '../foreman/geometry';
 
-const share = (part: number, whole: number): string => (whole ? pct(part / whole) : '—');
+const OBJECTS = { label: 'Объекты', to: '/admin/objects' };
 const signed = (v: number): ReactNode => <span className={v < 0 ? 'neg' : v > 0 ? 'pos' : 'muted'}>{moneySigned(v)}</span>;
 const placeOf = (d: Data, w: Work): string => {
   const r = byId(d.rooms, w.roomId);
   return r ? `${r.name}, ${r.floor}` : 'Весь объект';
 };
 
-/** What stands out on an object, the worst first. Red only for what is overdue or over the plan. */
-function flags(d: Data, v: ObjectView): { tone: Tone; text: string }[] {
-  const o = v.object;
-  const review = d.avrs.filter((a) => a.objectId === o.id && a.status === 'review').length;
-  const f: { tone: Tone; text: string }[] = [];
-  if (v.spent > o.planCost) f.push({ tone: 'negative', text: `Затраты выше плана на ${money(v.spent - o.planCost)}` });
-  if (v.lateWorks) f.push({ tone: 'negative', text: `${count(v.lateWorks, 'работа', 'работы', 'работ')} с прошедшим сроком` });
-  if (review) f.push({ tone: 'hue', text: `${count(review, 'АВР', 'АВР', 'АВР')} на проверке` });
-  if (v.openLines) f.push({ tone: 'warning', text: count(v.openLines, 'позиция не обеспечена', 'позиции не обеспечены', 'позиций не обеспечено') });
-  if (v.openIssues) f.push({ tone: 'neutral', text: count(v.openIssues, 'замечание', 'замечания', 'замечаний') });
-  return f;
+/** The one thing that is wrong on an object, the worst first: red for money over the plan or a missed deadline, amber for open remarks. */
+function flag(v: ObjectView): { kind: StatusKind; text: string } | undefined {
+  if (v.spent > v.object.planCost) return { kind: 'problem', text: 'Перерасход' };
+  if (v.lateWorks) return { kind: 'problem', text: 'Срок прошёл' };
+  if (v.openIssues) return { kind: 'wait', text: count(v.openIssues, 'замечание', 'замечания', 'замечаний') };
+  return undefined;
 }
 
 /* --------------------------------------------------------------- the list */
 export function Objects() {
   const d = useData();
   const views = d.objects.map((o) => objectView(d, o));
-  const active = d.objects.filter((o) => o.status === 'active').length;
-  const spent = views.reduce((s, v) => s + v.spent, 0);
-  const plan = d.objects.reduce((s, o) => s + o.planCost, 0);
-  const income = views.reduce((s, v) => s + v.income, 0);
-  const contract = d.objects.reduce((s, o) => s + o.contractSum, 0);
-  const late = views.reduce((s, v) => s + v.lateWorks, 0);
-  const review = d.avrs.filter((a) => a.status === 'review').length;
-  const over = views.filter((v) => v.spent > v.object.planCost);
-  const waits = [late ? `${count(late, 'работа', 'работы', 'работ')} с прошедшим сроком` : '', review ? `${count(review, 'АВР ждёт', 'АВР ждут', 'АВР ждут')} проверки` : ''].filter(Boolean);
   return (
-    <Page title="Управление объектами"
-      sub={over.length ? `Затраты выше плана: ${over.map((v) => v.object.name).join(', ')}.`
-        : waits.length ? `${waits.join(', ')}.`
-          : 'Работ с прошедшим сроком и актов на проверке нет.'}>
-      <Stats items={[
-        { label: 'Затраты по объектам', value: money(spent), lead: true, hint: `${share(spent, plan)} плановых затрат ${money(plan)}` },
-        { label: 'Получено от заказчиков', value: money(income), hint: `из ${money(contract)} по договорам` },
-        { label: 'Объектов в работе', value: active, zero: !active, hint: `всего ${d.objects.length}` },
-        { label: 'АВР на проверке', value: review, zero: !review },
-        { label: 'Работ с прошедшим сроком', value: late ? <span className="neg">{late}</span> : 0, zero: !late },
-      ]} />
-      {views.length === 0 && <Card title="Объекты"><Empty>Объектов пока нет.</Empty></Card>}
-      <div className="grid cols-2">
-        {views.map((v) => <ObjectLink key={v.object.id} v={v} />)}
-      </div>
+    <Page title="Объекты">
+      <Card flush>
+        {views.length ? (
+          <List>
+            {views.map((v) => {
+              const f = flag(v);
+              return (
+                <Row key={v.object.id} to={`/admin/objects/${v.object.id}`} wrap title={v.object.name} sub={v.object.stage}
+                  value={pct(v.progress)} meta="сделано" side={f ? <Status kind={f.kind}>{f.text}</Status> : undefined} />
+              );
+            })}
+          </List>
+        ) : <Empty>Объектов пока нет.</Empty>}
+      </Card>
     </Page>
-  );
-}
-
-function ObjectLink({ v }: { v: ObjectView }) {
-  const d = useData();
-  const o = v.object;
-  const over = v.spent > o.planCost;
-  const fl = flags(d, v);
-  return (
-    <Link to={`/admin/objects/${o.id}`} className="card" style={{ display: 'block' }}>
-      <div className="card-head">
-        <h2>{o.name}</h2>
-        <ChevronRight size={18} color="var(--faint)" />
-      </div>
-      <div className="card-body stack" style={{ gap: 14 }}>
-        <p className="muted">{o.stage} · прораб {userName(d, o.foremanId)} · заказчик {o.customer}</p>
-        <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
-            <span>Выполнено</span>
-            <span className="num">{pct(v.progress)} <span className="muted">· принято {pct(v.accepted)}</span></span>
-          </div>
-          <Track value={v.accepted} second={v.progress} max={1} />
-        </div>
-        <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
-            <span>Затраты из плана</span>
-            <span className={`num ${over ? 'neg' : ''}`}>{money(v.spent)} из {money(o.planCost)}</span>
-          </div>
-          <Track value={v.spent} max={o.planCost} />
-        </div>
-        <div className="btn-row">
-          {fl.map((x) => <Pill key={x.text} tone={x.tone}>{x.text}</Pill>)}
-          {!fl.length && <Pill tone="positive">Отклонений нет</Pill>}
-        </div>
-      </div>
-    </Link>
   );
 }
 
@@ -117,8 +68,8 @@ export function ObjectCard() {
   const o = byId(d.objects, id);
   if (!o) {
     return (
-      <Page title="Объект не найден" back="/admin/objects">
-        <Card title="Объект"><Empty>Такого объекта нет. Возможно, ссылка устарела.</Empty></Card>
+      <Page title="Объект не найден" path={[OBJECTS, { label: 'Не найден' }]}>
+        <Card><Empty>Такого объекта нет. Возможно, ссылка устарела.</Empty></Card>
       </Page>
     );
   }
@@ -128,13 +79,13 @@ export function ObjectCard() {
   const review = d.avrs.filter((a) => a.objectId === o.id && a.status === 'review').length;
   const geoReview = d.geoVersions.filter((v) => v.objectId === o.id && v.status === 'review').length;
   return (
-    <Page back="/admin/objects" title={o.name} sub={`${o.stage} · ${o.address} · заказчик ${o.customer}`}>
+    <Page title={o.name} path={[OBJECTS, { label: o.name }]}>
       <Tabs value={tab} onChange={setTab} tabs={[
         { value: 'overview', label: 'Обзор' },
-        { value: 'geometry', label: 'Геометрия', count: geoReview || undefined },
+        { value: 'geometry', label: 'Замеры', count: geoReview || undefined },
         { value: 'works', label: 'Работы' },
         { value: 'materials', label: 'Материалы' },
-        { value: 'avr', label: 'АВР', count: review || undefined },
+        { value: 'avr', label: 'Акты', count: review || undefined },
         { value: 'money', label: 'Деньги' },
       ]} />
       {tab === 'overview' && <Overview o={o} go={setTab} />}
@@ -154,55 +105,43 @@ function Overview({ o, go }: { o: BuildObject; go: (t: TabId) => void }) {
   const over = v.spent > o.planCost;
   const left = daysBetween(d.today, o.finish);
   const review = d.avrs.filter((a) => a.objectId === o.id && a.status === 'review');
+  const geo = floorsOf(d, o.id).filter((f) => currentGeo(d, o.id, f)?.status === 'review');
   const toPresent = d.works.filter((w) => w.objectId === o.id && workToPresent(d, w) > 0).length;
   const issues = d.issues.filter((i) => i.objectId === o.id && i.status !== 'done');
-  const quiet = !v.lateWorks && !toPresent && !v.openLines && !issues.length;
+  const quiet = !review.length && !geo.length && !over && !v.lateWorks && !toPresent && !v.openLines && !issues.length;
   return (
     <>
-      {review.map((a) => (
-        <Finding key={a.id} icon={<FileText size={18} />}>
-          АВР № {a.num} от {dShort(a.date)} ждёт проверки объёмов.
-          <div style={{ marginTop: 8 }}><Btn small onClick={() => go('avr')}>Проверить акт</Btn></div>
-        </Finding>
-      ))}
       <Stats items={[
-        { label: 'Стоимость по договору', value: money(o.contractSum), lead: true, hint: o.contract },
-        { label: 'Получено от заказчика', value: money(v.income), hint: `${share(v.income, o.contractSum)} договора` },
-        { label: 'Затраты', value: <span className={over ? 'neg' : ''}>{money(v.spent)}</span>, hint: `${share(v.spent, o.planCost)} плановых` },
-        { label: 'Плановые затраты', value: money(o.planCost) },
-        { label: 'Ожидаемый результат', value: <span className={v.expectedResult < 0 ? 'neg' : ''}>{money(v.expectedResult)}</span>, hint: 'договор минус плановые затраты' },
+        { label: 'Сделано', value: pct(v.progress), lead: true, hint: `принято ${pct(v.accepted)}` },
+        { label: 'Затраты', value: <span className={over ? 'neg' : ''}>{money(v.spent)}</span>, hint: over ? `выше плана на ${money(v.spent - o.planCost)}` : `из ${money(o.planCost)} по плану` },
+        { label: 'Получено от заказчика', value: money(v.income), hint: `из ${money(o.contractSum)}` },
       ]} />
-      <div className="grid cols-2">
-        <Card title="Затраты и работы">
-          <div className="stack" style={{ gap: 16 }}>
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
-                <span>Затраты против плана</span>
-                <span className={`num ${over ? 'neg' : ''}`}>{money(v.spent)} из {money(o.planCost)}</span>
-              </div>
-              <Track value={v.spent} max={o.planCost} />
-              <div className="track-ends">
-                <span>{share(v.spent, o.planCost)} плана</span>
-                <span>{over ? `перерасход ${money(v.spent - o.planCost)}` : `в запасе ${money(o.planCost - v.spent)}`}</span>
-              </div>
-            </div>
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
-                <span>Работы</span>
-                <span className="num">выполнено {pct(v.progress)} · принято {pct(v.accepted)}</span>
-              </div>
-              <Track value={v.accepted} second={v.progress} max={1} />
-              <div className="legend" style={{ marginTop: 6 }}>
-                <span><i className="mk-received" />принято</span>
-                <span><i className="mk-ordered" />выполнено, не принято</span>
-              </div>
-            </div>
-          </div>
-        </Card>
-        <Card title="Договор и сроки">
+      <Card title="Что не так" flush>
+        {quiet ? <Empty>Отклонений и замечаний нет.</Empty> : (
+          <List>
+            {review.map((a) => <Row key={a.id} onClick={() => go('avr')} title={`Проверить АВР № ${a.num}`} sub={`от ${dShort(a.date)} · ${a.by}`} />)}
+            {geo.map((f) => <Row key={f} onClick={() => go('geometry')} title={`Проверить замеры: ${f}`} />)}
+            {over && <Row onClick={() => go('money')} title="Затраты выше плана" value={<span className="neg">{money(v.spent - o.planCost)}</span>} />}
+            {v.lateWorks > 0 && <Row onClick={() => go('works')} title="Работы с прошедшим сроком" value={<span className="neg">{v.lateWorks}</span>} />}
+            {toPresent > 0 && <Row onClick={() => go('works')} title="Сделано, но не вошло в акт" value={toPresent} />}
+            {v.openLines > 0 && <Row onClick={() => go('materials')} title="Материалы ещё не обеспечены" value={v.openLines} />}
+            {issues.map((i) => (
+              <Row key={i.id} wrap title={`${ISSUE_LABEL[i.kind]}: ${i.place}`} sub={`${i.text} ${i.by}, ${dShort(i.date)}.`}
+                side={<Status kind={i.status === 'open' ? 'wait' : 'work'}>{i.status === 'open' ? 'Открыто' : 'В работе'}</Status>} />
+            ))}
+          </List>
+        )}
+      </Card>
+      <Details label="Договор и сроки">
+        <Card>
           <dl className="kv left">
-            <dt>Договор</dt><dd>{o.contract}</dd>
+            <dt>Этап</dt><dd>{o.stage}</dd>
+            <dt>Адрес</dt><dd>{o.address}</dd>
             <dt>Заказчик</dt><dd>{o.customer}</dd>
+            <dt>Договор</dt><dd>{o.contract}</dd>
+            <dt>Сумма договора</dt><dd>{money(o.contractSum)}</dd>
+            <dt>Плановые затраты</dt><dd>{money(o.planCost)}</dd>
+            <dt>Ожидаемый результат</dt><dd className={v.expectedResult < 0 ? 'neg' : ''}>{money(v.expectedResult)}</dd>
             <dt>Юрлицо</dt><dd>{byId(d.entities, o.entityId)?.name ?? dash}</dd>
             <dt>Прораб</dt><dd>{userName(d, o.foremanId)}</dd>
             <dt>Начало</dt><dd>{dFull(o.start)}</dd>
@@ -217,36 +156,21 @@ function Overview({ o, go }: { o: BuildObject; go: (t: TabId) => void }) {
             <dt>Состояние</dt><dd>{OBJECT_STATUS[o.status]}</dd>
           </dl>
         </Card>
-      </div>
-      <Card title="Отклонения и замечания" flush>
-        {quiet ? <Empty>Отклонений и открытых замечаний по объекту нет.</Empty> : (
-          <List>
-            {v.lateWorks > 0 && <Row onClick={() => go('works')} title="Работы с прошедшим сроком" value={<span className="neg">{v.lateWorks}</span>} />}
-            {toPresent > 0 && <Row onClick={() => go('works')} title="Выполнено и не предъявлено к приёмке" sub="Объём есть в факте работ, но не вошёл ни в один акт" value={toPresent} />}
-            {v.openLines > 0 && <Row onClick={() => go('materials')} title="Позиции материалов не обеспечены" value={v.openLines} />}
-            {issues.map((i) => (
-              <Row key={i.id} wrap title={`${ISSUE_LABEL[i.kind]}: ${i.place}`} sub={`${i.text} ${i.by}, ${dShort(i.date)}.`}
-                side={<Pill tone={i.status === 'open' ? 'warning' : 'neutral'}>{i.status === 'open' ? 'Открыто' : 'В работе'}</Pill>} />
-            ))}
-          </List>
-        )}
-      </Card>
+      </Details>
     </>
   );
 }
 
 /* --------------------------------------------------------------- geometry */
-/** Geometry is checked floor by floor: a version on review is confirmed as a whole or returned with a note. */
+/** Measurements are checked floor by floor: a version on review is accepted as a whole or returned with a note. */
 function Geometry({ o }: { o: BuildObject }) {
   const d = useData();
   const wide = useWide();
   const [roomId, setRoomId] = useState<string | null>(null);
   const [returning, setReturning] = useState<string | null>(null);
-  const [history, setHistory] = useState<string | null>(null);
   const floors = floorsOf(d, o.id);
   const rooms = d.rooms.filter((r) => r.objectId === o.id);
   const acts = d.acts.filter((a) => a.objectId === o.id).sort((a, b) => b.date.localeCompare(a.date) || b.num - a.num);
-  const versions = d.geoVersions.filter((v) => v.objectId === o.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.num - a.num);
   const firstReview = floors.find((f) => currentGeo(d, o.id, f)?.status === 'review');
   const back = returning ? currentGeo(d, o.id, returning) : undefined;
   const room = byId(rooms, roomId);
@@ -264,7 +188,7 @@ function Geometry({ o }: { o: BuildObject }) {
   ];
   return (
     <>
-      {floors.length === 0 && <Card title="Этажи"><Empty>Замеров по объекту ещё нет.</Empty></Card>}
+      {floors.length === 0 && <Card><Empty>Замеров по объекту ещё нет.</Empty></Card>}
       {floors.length > 0 && (
         <div className="grid cols-2">
           {floors.map((floor) => {
@@ -276,13 +200,9 @@ function Geometry({ o }: { o: BuildObject }) {
             return (
               <Card key={floor} title={floor} note={cur ? `версия ${cur.num}` : undefined} action={<GeoPill v={cur} />}>
                 <div className="stack">
-                  {cur?.status === 'review' && (
-                    <p className="muted">Передал на проверку {cur.by}{cur.sentAt ? `, ${dFull(cur.sentAt)}` : ''}. Акт сформирован на весь этаж, итоги зафиксированы при передаче.</p>
-                  )}
-                  {cur?.status === 'draft' && <p className="muted">Прораб ещё не передал эту версию на проверку.{cur.note ? ` Возвращена с замечанием: ${cur.note}` : ''}</p>}
-                  {cur?.status === 'confirmed' && <p className="muted">{['Подтверждена', cur.confirmedAt ? dFull(cur.confirmedAt) : ''].filter(Boolean).join(' ')}{cur.confirmedBy ? `, ${cur.confirmedBy}` : ''}. Служит основанием для расчётов.</p>}
-                  {!cur && <p className="muted">По этажу ещё нет версии геометрии.</p>}
-                  {cur && cur.status !== 'confirmed' && cur.reason && <p><span className="muted">Причина изменения:</span> {cur.reason}</p>}
+                  {cur?.status === 'draft' && <p>Прораб ещё не отправил на проверку.{cur.note ? <> <span className="muted">Вернули:</span> {cur.note}</> : null}</p>}
+                  {cur?.status === 'confirmed' && <p className="muted">Принято{cur.confirmedAt ? ` ${dFull(cur.confirmedAt)}` : ''}{cur.confirmedBy ? `, ${cur.confirmedBy}` : ''}</p>}
+                  {!cur && <p className="muted">Замеров по этажу ещё нет.</p>}
                   <dl className="kv">
                     <dt>Помещений</dt><dd>{t.rooms}</dd>
                     <dt>Пол</dt><dd>{dec(t.floor)} м²</dd>
@@ -290,135 +210,133 @@ function Geometry({ o }: { o: BuildObject }) {
                     <dt>Периметр</dt><dd>{dec(t.perimeter)} м</dd>
                   </dl>
                   {cur && cur.status !== 'confirmed' && (
-                    <p>
-                      {conf?.totals
-                        ? <><span className="muted">К подтверждённой версии {conf.num}:</span> <span className="num">{deltaLine(t, conf.totals)}</span></>
-                        : 'Подтверждённой версии по этажу нет: расчёты по нему пока недоступны.'}
-                    </p>
+                    conf?.totals
+                      ? <p><span className="muted">К принятым (версия {conf.num}):</span> <span className="num">{deltaLine(t, conf.totals)}</span></p>
+                      : <p className="muted">Принятых замеров по этажу ещё нет.</p>
                   )}
                   {cur?.status === 'review' && (
-                    <>
-                      <div>
-                        <div className="section-title" style={{ margin: '0 0 6px' }}>Что изменилось</div>
-                        {cur.changes.length
-                          ? cur.changes.map((h, i) => <p key={i} style={{ marginBottom: 4 }}><span className="muted">{dShort(h.at)}, {h.by}:</span> {h.text}</p>)
-                          : <p className="muted">Изменений в версии не записано.</p>}
-                      </div>
-                      <div className="btn-row">
-                        <Btn kind={floor === firstReview ? 'primary' : 'secondary'} style={{ flex: '1 1 180px' }}
-                          onClick={() => { act.decideFloor(o.id, floor, true); toast(`${floor}: версия ${cur.num} подтверждена`); }}>Подтвердить версию</Btn>
-                        <Btn style={{ flex: '1 1 180px' }} onClick={() => setReturning(floor)}>Вернуть на доработку</Btn>
-                      </div>
-                    </>
+                    <div className="btn-row">
+                      <Btn kind={floor === firstReview ? 'primary' : 'secondary'} style={{ flex: '1 1 180px' }}
+                        onClick={() => { act.decideFloor(o.id, floor, true); toast(`${floor}: замеры приняты`); }}>Принять замеры</Btn>
+                      <Btn style={{ flex: '1 1 180px' }} onClick={() => setReturning(floor)}>Вернуть на доработку</Btn>
+                    </div>
                   )}
-                  <div><Btn small onClick={() => setHistory(floor)}>История версий</Btn></div>
+                  {cur && (
+                    <Details label={cur.status === 'review' ? 'Что изменилось и версии' : 'Версии'}>
+                      {cur.status === 'review' && (
+                        <div>
+                          <p className="muted" style={{ marginBottom: 6 }}>Отправил {cur.by}{cur.sentAt ? `, ${dFull(cur.sentAt)}` : ''}</p>
+                          {cur.reason && <p style={{ marginBottom: 6 }}><span className="muted">Причина:</span> {cur.reason}</p>}
+                          {cur.changes.length
+                            ? cur.changes.map((h, i) => <p key={i} style={{ marginBottom: 4 }}><span className="muted">{dShort(h.at)}, {h.by}:</span> {h.text}</p>)
+                            : <p className="muted">Изменений не записано.</p>}
+                        </div>
+                      )}
+                      <VersionList objectId={o.id} floor={floor} />
+                    </Details>
+                  )}
                 </div>
               </Card>
             );
           })}
         </div>
       )}
-      <Card title="История версий" note={versions.length ? count(versions.length, 'версия', 'версии', 'версий') : undefined} flush>
-        {versions.length ? (
-          <List>
-            {versions.map((v) => (
-              <Row key={v.id} onClick={() => setHistory(v.floor)} title={`${v.floor}, версия ${v.num}`}
-                sub={`создана ${dFull(v.createdAt)}, ${v.by}${v.confirmedAt ? ` · подтверждена ${dFull(v.confirmedAt)}${v.confirmedBy ? `, ${v.confirmedBy}` : ''}` : ''}${v.reason ? ` · причина: ${v.reason}` : ''}`}
-                side={<GeoPill v={v} />} />
-            ))}
-          </List>
-        ) : <Empty>Версий геометрии по объекту ещё нет.</Empty>}
-      </Card>
-      <Card title="Помещения" note={rooms.length ? `${count(rooms.length, 'помещение', 'помещения', 'помещений')} · пол ${num(all.floor, 1)} м²` : undefined} flush>
-        <DataTable cols={cols} rows={rooms} keyOf={(r) => r.id} onRow={(r) => setRoomId(r.id)} empty="Замеров по объекту ещё нет."
-          foot={['Итого', '', num(all.floor, 1), num(all.walls, 1), '', '']} />
-      </Card>
-      <Card title="Акты геометрии" flush>
-        {acts.length ? (
-          <List>
-            {acts.map((a: GeometryAct) => {
-              const ver = byId(d.geoVersions, a.versionId);
-              return (
-                <Row key={a.id} title={`Акт геометрии № ${a.num}${a.floor ? `, ${a.floor}` : ''}`}
-                  sub={`${dFull(a.date)} · ${a.by}${ver ? ` · версия ${ver.num}, ${GEO_LABEL[ver.status].toLowerCase()}` : ''}`}
-                  value={`${num(a.floorArea, 1)} м²`} meta={count(a.rooms, 'помещение', 'помещения', 'помещений')} />
-              );
-            })}
-          </List>
-        ) : <Empty>Актов геометрии по объекту ещё нет.</Empty>}
-      </Card>
+      {rooms.length > 0 && (
+        <Details label={`Помещения: ${rooms.length}, пол ${num(all.floor, 1)} м²`}>
+          <Card flush>
+            <DataTable cols={cols} rows={rooms} keyOf={(r) => r.id} onRow={(r) => setRoomId(r.id)}
+              foot={['Итого', '', num(all.floor, 1), num(all.walls, 1), '', '']} />
+          </Card>
+        </Details>
+      )}
+      {acts.length > 0 && (
+        <Details label={`Акты замеров: ${acts.length}`}>
+          <Card flush>
+            <List>
+              {acts.map((a: GeometryAct) => {
+                const ver = byId(d.geoVersions, a.versionId);
+                return (
+                  <Row key={a.id} title={`Акт замеров № ${a.num}${a.floor ? `, ${a.floor}` : ''}`}
+                    sub={`${dFull(a.date)} · ${a.by}${ver ? ` · версия ${ver.num}` : ''}`}
+                    value={`${num(a.floorArea, 1)} м²`} meta={count(a.rooms, 'помещение', 'помещения', 'помещений')} />
+                );
+              })}
+            </List>
+          </Card>
+        </Details>
+      )}
 
-      <NoteSheet open={!!back} title={back ? `Вернуть на доработку: ${back.floor}, версия ${back.num}` : ''} label="Что нужно исправить" action="Вернуть" required
+      <NoteSheet open={!!back} title={back ? `Вернуть на доработку: ${back.floor}` : ''} label="Что нужно исправить" action="Вернуть" required
         onClose={() => setReturning(null)}
-        onSubmit={(note) => { if (back) { act.decideFloor(o.id, back.floor, false, note); toast(`${back.floor}: версия ${back.num} возвращена на доработку`); } setReturning(null); }} />
-      <Sheet open={!!history} wide title={history ? `Версии: ${history}` : ''} onClose={() => setHistory(null)}>
-        {history && <VersionList objectId={o.id} floor={history} />}
-      </Sheet>
+        onSubmit={(note) => { if (back) { act.decideFloor(o.id, back.floor, false, note); toast(`${back.floor}: замеры возвращены на доработку`); } setReturning(null); }} />
       <Sheet open={!!room} title={room ? `${room.name}, ${room.floor}` : ''} onClose={() => setRoomId(null)}>
         {room && (
           <div className="stack" style={{ gap: 16 }}>
             <dl className="kv">
-              <dt>Назначение</dt><dd>{room.purpose ?? dash}</dd>
-              <dt>Способ измерения</dt><dd>{room.method ? METHOD_LABEL[room.method] : dash}</dd>
               <dt>Длина × ширина × высота</dt><dd>{dims(room)} м</dd>
-              <dt>Площадь пола</dt><dd>{num(roomFloor(room), 1)} м²</dd>
-              <dt>Стены без проёмов, с нишами и выступами</dt><dd>{num(roomSurface(room, 'walls'), 1)} м²</dd>
+              <dt>Пол</dt><dd>{num(roomFloor(room), 1)} м²</dd>
+              <dt>Стены без проёмов</dt><dd>{num(roomSurface(room, 'walls'), 1)} м²</dd>
               <dt>Откосы</dt><dd>{num(roomSlopes(room), 1)} м²</dd>
               <dt>Объём</dt><dd>{num(roomVolume(room), 1)} м³</dd>
               <dt>Наибольшая неровность</dt><dd>{uneven(room) === undefined ? dash : `${num(uneven(room) ?? 0)} мм`}</dd>
               <dt>Последний замер</dt><dd>{dFull(room.measuredAt)}, {room.measuredBy}</dd>
-              <dt>Фото</dt><dd>{room.photos}</dd>
             </dl>
             {room.note && <p>{room.note}</p>}
-            <div>
-              <div className="section-title" style={{ margin: '0 0 6px' }}>Проёмы</div>
-              {room.openings.length ? room.openings.map((op, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
-                  <span>{op.kind === 'door' ? 'Дверь' : 'Окно'} {dec(op.w)} × {dec(op.h)} м</span>
-                  <span className="num muted">{num(op.w * op.h, 1)} м²</span>
+            <Details>
+              <dl className="kv">
+                <dt>Назначение</dt><dd>{room.purpose ?? dash}</dd>
+                <dt>Чем мерили</dt><dd>{room.method ? METHOD_LABEL[room.method] : dash}</dd>
+                <dt>Фото</dt><dd>{room.photos}</dd>
+              </dl>
+              <div>
+                <div className="section-title" style={{ margin: '0 0 6px' }}>Проёмы</div>
+                {room.openings.length ? room.openings.map((op, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
+                    <span>{op.kind === 'door' ? 'Дверь' : 'Окно'} {dec(op.w)} × {dec(op.h)} м</span>
+                    <span className="num muted">{num(op.w * op.h, 1)} м²</span>
+                  </div>
+                )) : <p className="muted">Проёмов нет.</p>}
+              </div>
+              {(room.elements?.length ?? 0) > 0 && (
+                <div>
+                  <div className="section-title" style={{ margin: '0 0 6px' }}>Ниши, выступы и откосы</div>
+                  {room.elements?.map((e) => (
+                    <div key={e.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
+                      <span>{e.name} <span className="muted">· {ELEMENT_LABEL[e.kind].toLowerCase()}, {dec(e.length)} × {dec(e.height)} м × {e.count}</span></span>
+                      <span className="num muted nowrap">{num(elementArea(e), 1)} м²</span>
+                    </div>
+                  ))}
                 </div>
-              )) : <p className="muted">Проёмов нет.</p>}
-            </div>
-            {(room.elements?.length ?? 0) > 0 && (
+              )}
+              {(room.zones?.length ?? 0) > 0 && (
+                <div>
+                  <div className="section-title" style={{ margin: '0 0 6px' }}>Зоны</div>
+                  {room.zones?.map((z) => (
+                    <div key={z.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
+                      <span>{z.name}{z.purpose ? <span className="muted"> · {z.purpose}</span> : null}</span>
+                      <span className="num muted nowrap">{num(z.area, 1)} м²</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {(room.uneven?.length ?? 0) > 0 && (
+                <div>
+                  <div className="section-title" style={{ margin: '0 0 6px' }}>Неровности</div>
+                  {room.uneven?.map((x) => (
+                    <div key={x.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
+                      <span>{x.place}</span>
+                      <span className="num muted nowrap">{num(x.mm)} мм</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div>
-                <div className="section-title" style={{ margin: '0 0 6px' }}>Ниши, выступы и откосы</div>
-                {room.elements?.map((e) => (
-                  <div key={e.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
-                    <span>{e.name} <span className="muted">· {ELEMENT_LABEL[e.kind].toLowerCase()}, {dec(e.length)} × {dec(e.height)} м × {e.count}</span></span>
-                    <span className="num muted nowrap">{num(elementArea(e), 1)} м²</span>
-                  </div>
+                <div className="section-title" style={{ margin: '0 0 6px' }}>История изменений</div>
+                {[...room.history].reverse().map((h, i) => (
+                  <p key={i} style={{ marginBottom: 4 }}><span className="muted">{dShort(h.at)}, {h.by}:</span> {h.text}</p>
                 ))}
               </div>
-            )}
-            {(room.zones?.length ?? 0) > 0 && (
-              <div>
-                <div className="section-title" style={{ margin: '0 0 6px' }}>Зоны</div>
-                {room.zones?.map((z) => (
-                  <div key={z.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
-                    <span>{z.name}{z.purpose ? <span className="muted"> · {z.purpose}</span> : null}</span>
-                    <span className="num muted nowrap">{num(z.area, 1)} м²</span>
-                  </div>
-                ))}
-              </div>
-            )}
-            {(room.uneven?.length ?? 0) > 0 && (
-              <div>
-                <div className="section-title" style={{ margin: '0 0 6px' }}>Неровности</div>
-                {room.uneven?.map((x) => (
-                  <div key={x.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
-                    <span>{x.place}</span>
-                    <span className="num muted nowrap">{num(x.mm)} мм</span>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div>
-              <div className="section-title" style={{ margin: '0 0 6px' }}>История изменений</div>
-              {[...room.history].reverse().map((h, i) => (
-                <p key={i} style={{ marginBottom: 4 }}><span className="muted">{dShort(h.at)}, {h.by}:</span> {h.text}</p>
-              ))}
-              <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>Замер не перезаписывается: каждое изменение остаётся строкой в истории.</p>
-            </div>
+            </Details>
           </div>
         )}
       </Sheet>
@@ -439,7 +357,7 @@ function Works({ o }: { o: BuildObject }) {
   const cols: Col<Work>[] = wide ? [
     { head: 'Работа и помещение', cell: (w) => <Two a={w.name} b={placeOf(d, w)} /> },
     { head: 'План', num: true, cell: (w) => qty(w.plan, w.unit) },
-    { head: 'Выполнено', num: true, cell: (w) => qty(workDone(w), w.unit) },
+    { head: 'Сделано', num: true, cell: (w) => qty(workDone(w), w.unit) },
     { head: 'Принято', num: true, cell: (w) => qty(w.accepted, w.unit) },
     { head: 'Срок', cell: deadline },
     { head: 'Состояние', cell: state },
@@ -448,14 +366,14 @@ function Works({ o }: { o: BuildObject }) {
     { head: 'Помещение', phone: 'sub', cell: (w) => placeOf(d, w) },
     { head: 'Принято', phone: 'sub', cell: (w) => `принято ${qty(w.accepted, w.unit)}` },
     { head: 'Срок', phone: 'sub', cell: (w) => <>срок {deadline(w)}</> },
-    { head: 'Выполнено', phone: 'value', cell: (w) => `${n1(workDone(w))} из ${qty(w.plan, w.unit)}` },
+    { head: 'Сделано', phone: 'value', cell: (w) => `${n1(workDone(w))} из ${qty(w.plan, w.unit)}` },
     { head: 'Состояние', phone: 'meta', cell: state },
   ];
   const facts = work ? [...work.facts].sort((a, b) => b.date.localeCompare(a.date)) : [];
   const inActs = work ? d.avrs.flatMap((a) => a.lines.filter((l) => l.workId === work.id).map((l) => ({ a, l }))) : [];
   return (
     <>
-      <Card title="Работы" note={works.length ? `выполнено ${pct(v.progress)} · принято ${pct(v.accepted)}` : undefined} flush>
+      <Card title="Работы" note={works.length ? `сделано ${pct(v.progress)} · принято ${pct(v.accepted)}` : undefined} flush>
         <DataTable cols={cols} rows={works} keyOf={(w) => w.id} onRow={(w) => setWorkId(w.id)} empty="План работ по объекту ещё не составлен." />
       </Card>
       <Sheet open={!!work} title={work?.name ?? ''} onClose={() => setWorkId(null)}>
@@ -464,30 +382,32 @@ function Works({ o }: { o: BuildObject }) {
             <dl className="kv">
               <dt>Помещение</dt><dd>{placeOf(d, work)}</dd>
               <dt>План</dt><dd>{qty(work.plan, work.unit)}</dd>
-              <dt>Выполнено по факту</dt><dd>{qty(workDone(work), work.unit)}</dd>
+              <dt>Сделано</dt><dd>{qty(workDone(work), work.unit)}</dd>
               <dt>Принято</dt><dd>{qty(work.accepted, work.unit)}</dd>
-              <dt>Выполнено и не вошло в акты</dt><dd>{qty(workToPresent(d, work), work.unit)}</dd>
+              <dt>Сделано, но не в акте</dt><dd>{qty(workToPresent(d, work), work.unit)}</dd>
               <dt>Срок</dt><dd>{deadline(work)}</dd>
               <dt>Состояние</dt><dd>{state(work)}</dd>
             </dl>
-            <div>
-              <div className="section-title" style={{ margin: '0 0 6px' }}>Записи о выполнении</div>
-              {facts.length ? facts.map((f, i) => (
-                <p key={i} style={{ marginBottom: 4 }}>
-                  <span className="muted">{dShort(f.date)}, {f.by}:</span> {qty(f.qty, work.unit)}
-                  {f.note ? `. ${f.note}` : ''}{f.photos ? <span className="muted"> · фото: {f.photos}</span> : null}
-                </p>
-              )) : <p className="muted">Факт по этой работе ещё не вносили.</p>}
-            </div>
-            <div>
-              <div className="section-title" style={{ margin: '0 0 6px' }}>В актах</div>
-              {inActs.length ? inActs.map(({ a, l }) => (
-                <p key={a.id} style={{ marginBottom: 4 }}>
-                  <span className="muted">АВР № {a.num} от {dShort(a.date)}:</span> заявлено {qty(l.qty, work.unit)},{' '}
-                  {a.status === 'accepted' ? `принято ${qty(l.accepted ?? 0, work.unit)}` : a.status === 'review' ? 'на проверке' : 'возвращён на доработку'}
-                </p>
-              )) : <p className="muted">Работа не входила ни в один акт.</p>}
-            </div>
+            <Details label="Записи и акты">
+              <div>
+                <div className="section-title" style={{ margin: '0 0 6px' }}>Что отмечал прораб</div>
+                {facts.length ? facts.map((f, i) => (
+                  <p key={i} style={{ marginBottom: 4 }}>
+                    <span className="muted">{dShort(f.date)}, {f.by}:</span> {qty(f.qty, work.unit)}
+                    {f.note ? `. ${f.note}` : ''}{f.photos ? <span className="muted"> · фото: {f.photos}</span> : null}
+                  </p>
+                )) : <p className="muted">Записей ещё нет.</p>}
+              </div>
+              <div>
+                <div className="section-title" style={{ margin: '0 0 6px' }}>В актах</div>
+                {inActs.length ? inActs.map(({ a, l }) => (
+                  <p key={a.id} style={{ marginBottom: 4 }}>
+                    <span className="muted">АВР № {a.num} от {dShort(a.date)}:</span> заявлено {qty(l.qty, work.unit)},{' '}
+                    {a.status === 'accepted' ? `принято ${qty(l.accepted ?? 0, work.unit)}` : a.status === 'review' ? 'на проверке' : 'возвращён на доработку'}
+                  </p>
+                )) : <p className="muted">Ни в одном акте.</p>}
+              </div>
+            </Details>
           </div>
         )}
       </Sheet>
@@ -528,30 +448,32 @@ function Materials({ o }: { o: BuildObject }) {
         { value: 'open', label: 'Не обеспечены', count: open.length },
         { value: 'all', label: 'Все позиции', count: lines.length },
       ]} />
-      <Card title="Потребности объекта" flush>
+      <Card title="Заявки объекта" flush>
         {list.length ? (
           <div className="list">
             {list.map(({ need, line, done }) => (
               <div key={line.id} className="row" style={{ display: 'block' }}>
                 <NeedLineBlock line={line} legend={!done}
-                  caption={`Потребность № ${need.num} · нужно к ${dShort(line.wantDate)}${line.comment ? ` · ${line.comment}` : ''}`} />
+                  caption={`Заявка № ${need.num} · нужно к ${dShort(line.wantDate)}${line.comment ? ` · ${line.comment}` : ''}`} />
               </div>
             ))}
           </div>
-        ) : <Empty>{lines.length ? 'Все позиции объекта обеспечены.' : 'Потребностей в материалах по объекту ещё не было.'}</Empty>}
+        ) : <Empty>{lines.length ? 'Все позиции объекта обеспечены.' : 'Заявок на материалы по объекту ещё не было.'}</Empty>}
       </Card>
-      <Card title="Материалы на объекте" note={stock.length ? count(stock.length, 'позиция', 'позиции', 'позиций') : undefined} flush>
-        <DataTable cols={cols} rows={stock} keyOf={(r) => r.material.id} empty="На объект ещё ничего не поступало." />
-      </Card>
+      <Details label={stock.length ? `Остатки на объекте: ${count(stock.length, 'позиция', 'позиции', 'позиций')}` : 'Остатки на объекте'}>
+        <Card flush>
+          <DataTable cols={cols} rows={stock} keyOf={(r) => r.material.id} empty="На объект ещё ничего не поступало." />
+        </Card>
+      </Details>
     </>
   );
 }
 
 /* -------------------------------------------------------------------- АВР */
 const AVR_STATUS: Record<Avr['status'], { text: string; tone: Tone }> = {
-  review: { text: 'На проверке', tone: 'hue' },
-  accepted: { text: 'Объёмы приняты', tone: 'positive' },
-  returned: { text: 'Возвращён на доработку', tone: 'warning' },
+  review: { text: 'На проверке', tone: 'warning' },
+  accepted: { text: 'Принято', tone: 'positive' },
+  returned: { text: 'Возвращён прорабу', tone: 'warning' },
 };
 
 function AvrTab({ o }: { o: BuildObject }) {
@@ -559,8 +481,21 @@ function AvrTab({ o }: { o: BuildObject }) {
   const avrs = d.avrs
     .filter((a) => a.objectId === o.id)
     .sort((a, b) => Number(b.status === 'review') - Number(a.status === 'review') || b.date.localeCompare(a.date) || b.num - a.num);
-  if (!avrs.length) return <Card title="Акты выполненных работ"><Empty>Актов выполненных работ по объекту ещё нет.</Empty></Card>;
-  return <>{avrs.map((a) => <AvrCard key={a.id} a={a} />)}</>;
+  if (!avrs.length) return <Card><Empty>Актов по объекту ещё нет.</Empty></Card>;
+  const fresh = avrs.filter((a) => a.status === 'review');
+  const old = avrs.filter((a) => a.status !== 'review');
+  return (
+    <>
+      {fresh.map((a) => <AvrCard key={a.id} a={a} />)}
+      {/* nothing to check: the newest act stays open, the older ones are one tap deeper */}
+      {!fresh.length && old[0] && <AvrCard a={old[0]} />}
+      {old.length > (fresh.length ? 0 : 1) && (
+        <Details label={`Прежние акты: ${old.length - (fresh.length ? 0 : 1)}`}>
+          {old.slice(fresh.length ? 0 : 1).map((a) => <AvrCard key={a.id} a={a} />)}
+        </Details>
+      )}
+    </>
+  );
 }
 
 /** One act. While it is on review the economist sets the accepted volume per work; the reported volume is never touched. */
@@ -577,13 +512,10 @@ function AvrCard({ a }: { a: Avr }) {
     toast(cut ? `АВР № ${a.num}: объёмы приняты с корректировкой` : `АВР № ${a.num}: объёмы приняты полностью`);
   };
   return (
-    <Card title={`АВР № ${a.num}`} action={<Pill tone={st.tone}>{st.text}</Pill>} flush>
-      <div className="row first" style={{ minHeight: 0, paddingTop: 2, paddingBottom: 8 }}>
-        <span className="row-main muted">от {dFull(a.date)} · сформировал {a.by} · {count(a.lines.length, 'работа', 'работы', 'работ')}</span>
-      </div>
+    <Card title={`АВР № ${a.num}`} note={`от ${dShort(a.date)} · ${a.by}`} action={<Pill tone={st.tone}>{st.text}</Pill>} flush>
       {a.status === 'review' ? (
         <>
-          <div className="list">
+          <div className="list" style={{ marginTop: 8 }}>
             {a.lines.map((l) => {
               const w = byId(d.works, l.workId);
               const unit = w?.unit ?? '';
@@ -604,11 +536,9 @@ function AvrCard({ a }: { a: Avr }) {
             })}
           </div>
           <div className="card-body stack" style={{ gap: 10, borderTop: '1px solid var(--rule)' }}>
-            <p className="muted" style={{ fontSize: 13, maxWidth: '76ch' }}>
-              Заявленный прорабом объём и принятый объём хранятся отдельно: заявленное не изменится, принятое запишется рядом с ним.
-              {cut > 0 && !nothing ? ` Сейчас по ${count(cut, 'работе', 'работам', 'работам')} принимается меньше заявленного.` : ''}
-              {nothing ? ' Чтобы не принимать ничего, верните акт на доработку.' : ''}
-            </p>
+            {nothing
+              ? <p className="neg" style={{ fontSize: 13 }}>Принять ноль нельзя: верните акт на доработку.</p>
+              : cut > 0 && <p style={{ fontSize: 13 }}>Меньше заявленного: {count(cut, 'работа', 'работы', 'работ')}.</p>}
             <div className="btn-row" style={{ maxWidth: 480 }}>
               <Btn kind="primary" style={{ flex: '1 1 180px' }} disabled={nothing} onClick={accept}>Принять объёмы</Btn>
               <Btn style={{ flex: '1 1 180px' }} onClick={() => setBack(true)}>Вернуть на доработку</Btn>
@@ -619,7 +549,7 @@ function AvrCard({ a }: { a: Avr }) {
             onSubmit={(note) => { act.decideAvr(a.id, 'returned', {}, note); toast(`АВР № ${a.num} возвращён на доработку`); setBack(false); }} />
         </>
       ) : (
-        <div className="list">
+        <div className="list" style={{ marginTop: 8 }}>
           {a.lines.map((l) => {
             const w = byId(d.works, l.workId);
             const unit = w?.unit ?? '';
@@ -628,7 +558,7 @@ function AvrCard({ a }: { a: Avr }) {
               <div key={l.workId} className="row" style={{ borderTop: '1px solid var(--rule)' }}>
                 <div className="row-main">
                   <div className="row-title wrap">{w?.name ?? 'Работы нет в плане'}</div>
-                  <div className="row-sub">{w ? placeOf(d, w) : ''}{less ? `${w ? ' · ' : ''}принято меньше заявленного на ${qty(round1(l.qty - (l.accepted ?? 0)), unit)}` : ''}</div>
+                  <div className="row-sub">{w ? placeOf(d, w) : ''}{less ? `${w ? ' · ' : ''}меньше заявленного на ${qty(round1(l.qty - (l.accepted ?? 0)), unit)}` : ''}</div>
                 </div>
                 <div className="row-side">
                   <div className="row-value">{a.status === 'accepted' ? `принято ${qty(l.accepted ?? 0, unit)}` : 'не принято'}</div>
@@ -649,10 +579,7 @@ function AvrCard({ a }: { a: Avr }) {
   );
 }
 
-/**
- * The financial basis of an accepted act. Acceptance does not create a payment by itself:
- * a person creates the request, and the request then goes through approval like any other.
- */
+/** Paying for an accepted act: a person creates the request, and it goes through approval like any other. */
 function AvrPay({ a }: { a: Avr }) {
   const d = useData();
   const o = byId(d.objects, a.objectId);
@@ -664,19 +591,19 @@ function AvrPay({ a }: { a: Avr }) {
   return (
     <div className="row" style={{ borderTop: '1px solid var(--rule)', flexWrap: 'wrap' }}>
       <div className="row-main" style={{ flexBasis: 220 }}>
-        <div className="row-title wrap">Финансовое основание</div>
+        <div className="row-title wrap">Оплата по акту</div>
         <div className="row-sub wrap">
           {tied.length
-            ? tied.map((r) => `заявка № ${r.num} на ${money(r.amount)}: ${REQUEST_LABEL[r.status].toLowerCase()}`).join('; ')
-            : 'Заявок на оплату по этому акту нет. Приёмка объёмов сама платёж не создаёт.'}
+            ? tied.map((r) => <span key={r.id}>заявка № {r.num} на {money(r.amount)} <Pill tone={REQUEST_TONE[r.status]}>{REQUEST_LABEL[r.status]}</Pill> </span>)
+            : 'Заявки на оплату ещё нет.'}
         </div>
       </div>
       <Btn small onClick={() => setOpen(true)}>Создать заявку на оплату</Btn>
       <Sheet open={open} title={`Заявка на оплату по АВР № ${a.num}`} onClose={() => setOpen(false)} dirty={amount > 0}
         foot={<><Btn onClick={() => setOpen(false)}>Отмена</Btn><Btn kind="primary" disabled={!amount || !o}
-          onClick={() => { if (o) { act.createRequest({ amount, basis, articleId: 'a-out2', entityId: o.entityId, objectId: o.id, due, avrId: a.id }); toast('Заявка создана и отправлена на согласование'); } setAmount(0); setOpen(false); }}>Создать заявку</Btn></>}>
+          onClick={() => { if (o) { act.createRequest({ amount, basis, articleId: 'a-out2', entityId: o.entityId, objectId: o.id, due, avrId: a.id }); toast('Заявка создана и отправлена на согласование'); } setAmount(0); setOpen(false); }}>Отправить на согласование</Btn></>}>
         <div className="form">
-          <p className="muted">{basis}. Заявка уйдёт на согласование собственнику. Платёж появится только после согласования и оплаты.</p>
+          <p>{basis}</p>
           <Field label="Сумма"><AmountInput autoFocus value={amount} onChange={setAmount} /></Field>
           <Field label="Оплатить до"><input className="input" type="date" min={d.today} value={due} onChange={(e) => setDue(e.target.value || due)} /></Field>
         </div>
@@ -693,20 +620,29 @@ function MoneyTab({ o }: { o: BuildObject }) {
   const inc = sumIn(ops);
   const out = sumOut(ops);
   const open = d.requests.filter((r) => r.objectId === o.id && ['pending', 'approved', 'noted', 'clarify'].includes(r.status));
-  const debts = open.reduce((s, r) => s + r.amount, 0);
   return (
     <>
       <Stats items={[
-        { label: 'Получено от заказчика', value: inc ? `+${money(inc)}` : money(0), lead: true, zero: !inc, hint: `${share(inc, o.contractSum)} договора на ${money(o.contractSum)}` },
+        { label: 'Получено от заказчика', value: inc ? `+${money(inc)}` : money(0), lead: true, zero: !inc, hint: `из ${money(o.contractSum)} по договору` },
         { label: 'Затраты', value: <span className={out > o.planCost ? 'neg' : ''}>{money(out)}</span>, hint: `из ${money(o.planCost)} по плану` },
-        { label: 'Сальдо по объекту', value: signed(inc - out) },
-        { label: 'В открытых заявках', value: money(debts), zero: !debts, hint: open.length ? count(open.length, 'заявка', 'заявки', 'заявок') : 'заявок нет' },
+        { label: 'Сальдо', value: signed(inc - out) },
       ]} />
-      <Card title="Операции по объекту" note={ops.length ? count(ops.length, 'операция', 'операции', 'операций') : undefined} flush>
+      <Card title="Операции" note={ops.length ? String(ops.length) : undefined} flush>
         {ops.length
           ? <List>{ops.map((x) => <OpRow key={x.id} op={x} onClick={() => setOpId(x.id)} />)}</List>
           : <Empty>Денежных операций по объекту ещё нет.</Empty>}
       </Card>
+      {open.length > 0 && (
+        <Details label={`Открытые заявки: ${open.length} на ${money(open.reduce((s, r) => s + r.amount, 0))}`}>
+          <Card flush>
+            <List>
+              {open.map((r) => (
+                <Row key={r.id} to="/admin/requests" wrap title={r.basis} sub={`№ ${r.num} · ${REQUEST_LABEL[r.status].toLowerCase()}`} value={money(r.amount)} money />
+              ))}
+            </List>
+          </Card>
+        </Details>
+      )}
       <OpSheet op={byId(d.operations, opId) ?? null} onClose={() => setOpId(null)} editable />
     </>
   );

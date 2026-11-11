@@ -1,7 +1,7 @@
 // The UI kit. Every screen is composed from these pieces, so the rules of the style live here:
 // ink chrome, pale status pills, tabular figures, 44px touch targets on a phone, sheets instead of pages for short forms.
 import { useEffect, useRef, useState, type ReactNode, type ButtonHTMLAttributes, type CSSProperties } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Camera, ChevronLeft, ChevronRight, Minus, Plus, X } from 'lucide-react';
 import { create } from 'zustand';
 import { initials, money as fmtMoney, num } from '../lib/format';
@@ -62,11 +62,17 @@ export function Crumbs({ path }: { path: Crumb[] }) {
   );
 }
 
+/**
+ * A screen. On a computer the path is shown as breadcrumbs; on a phone only one step back is shown,
+ * to the nearest parent, so the top of the screen stays short.
+ */
 export function Page(p: { title: ReactNode; sub?: ReactNode; actions?: ReactNode; back?: boolean | string; path?: Crumb[]; children: ReactNode }) {
   const nav = useNavigate();
+  const parent = p.path ? [...p.path].slice(0, -1).reverse().find((c) => c.to) : undefined;
   return (
     <div className="page">
       {p.path && <Crumbs path={p.path} />}
+      {parent?.to && <Link className="back back-phone" to={parent.to}><ChevronLeft size={16} /> {parent.label}</Link>}
       {p.back && !p.path && (
         <button className="back" onClick={() => (typeof p.back === 'string' ? nav(p.back) : nav(-1))}>
           <ChevronLeft size={16} /> Назад
@@ -375,7 +381,7 @@ const MARK: Record<PartStatus, string> = {
   received: 'mk-received', shipped: 'mk-shipped', reserved: 'mk-reserved', ordered: 'mk-ordered', handed: 'mk-handed', clarify: 'mk-clarify',
 };
 const MARK_LABEL: Record<PartStatus | 'open', string> = {
-  received: 'получено', shipped: 'в пути', reserved: 'резерв на складе', ordered: 'в заказе', handed: 'у снабженца', clarify: 'уточняется', open: 'не распределено',
+  received: 'получено', shipped: 'в пути', reserved: 'резерв на складе', ordered: 'в заказе', handed: 'у снабженца', clarify: 'ждёт ответа', open: 'не обеспечено',
 };
 const ORDER: PartStatus[] = ['received', 'shipped', 'reserved', 'ordered', 'handed', 'clarify'];
 /**
@@ -420,4 +426,47 @@ export function Track({ value, max, second, hue }: { value: number; max: number;
 
 export function Finding({ children, icon }: { children: ReactNode; icon?: ReactNode }) {
   return <div className="notice finding">{icon}<div>{children}</div></div>;
+}
+
+/* ------------------------------------------------------- simple patterns */
+/**
+ * Status in plain words, one of five kinds everywhere in the app:
+ * wait (ждёт кого-то, amber) · work (идёт, blue) · done (готово, green) · problem (нужна реакция, red) · off (закрыто, grey).
+ */
+export type StatusKind = 'wait' | 'work' | 'done' | 'problem' | 'off';
+const STATUS_TONE: Record<StatusKind, Tone> = { wait: 'warning', work: 'hue', done: 'positive', problem: 'negative', off: 'neutral' };
+export function Status({ kind, children }: { kind: StatusKind; children: ReactNode }) {
+  return <span className={`pill ${STATUS_TONE[kind]}`}>{children}</span>;
+}
+
+/** Rarely needed fields and explanations, folded under «Подробнее». Nothing is removed, it is one tap deeper. */
+export function Details({ label = 'Подробнее', children, open }: { label?: string; children: ReactNode; open?: boolean }) {
+  return (
+    <details className="more" open={open}>
+      <summary>{label}</summary>
+      <div className="more-body">{children}</div>
+    </details>
+  );
+}
+
+/** An old address that moved: goes to the new one and keeps the query (filters, the opened record). */
+export function Go({ to, add }: { to: string; add?: Record<string, string> }) {
+  const { search } = useLocation();
+  const q = new URLSearchParams(search);
+  for (const [k, v] of Object.entries(add ?? {})) if (!q.has(k)) q.set(k, v);
+  const qs = q.toString();
+  return <Navigate to={`${to}${qs ? `?${qs}` : ''}`} replace />;
+}
+
+/** One big action: a list of choices, each a full-width row with a plain title and one line under it. */
+export function Choice({ items }: { items: { key: string; title: string; sub?: string; icon?: ReactNode; onClick?: () => void; to?: string }[] }) {
+  return (
+    <div className="list" style={{ margin: '-8px -16px' }}>
+      {items.map((i) => (
+        i.to
+          ? <Link key={i.key} to={i.to} className="row choice">{i.icon}<span className="row-main"><span className="row-title">{i.title}</span>{i.sub && <span className="row-sub">{i.sub}</span>}</span><ChevronRight size={16} className="chev" /></Link>
+          : <button key={i.key} type="button" className="row choice" onClick={i.onClick}>{i.icon}<span className="row-main"><span className="row-title">{i.title}</span>{i.sub && <span className="row-sub">{i.sub}</span>}</span><ChevronRight size={16} className="chev" /></button>
+      ))}
+    </div>
+  );
 }

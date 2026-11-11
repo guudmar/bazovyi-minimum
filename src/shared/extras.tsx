@@ -6,7 +6,7 @@ import qrcode from 'qrcode-generator';
 import { Copy, Mic, QrCode, TriangleAlert } from 'lucide-react';
 import { act, useData } from '../data/store';
 import { ISSUE_LABEL, byId } from '../data/select';
-import { Btn, Field, Photos, Sheet, toast } from '../ui/kit';
+import { Btn, Details, Field, Photos, Sheet, toast } from '../ui/kit';
 import { addDays } from '../lib/format';
 import type { Issue, IssueKind } from '../data/types';
 
@@ -66,32 +66,30 @@ export function IssueSheet({ open, onClose, ctx }: { open: boolean; onClose: () 
   const people = d.users.filter((u) => u.role !== 'owner');
   const dirty = !!f.text.trim() || f.photos > 0;
   return (
-    <Sheet open={open} title="Новое замечание" onClose={onClose} dirty={dirty}
+    <Sheet open={open} title="Сообщить о проблеме" onClose={onClose} dirty={dirty}
       foot={<><Btn onClick={onClose}>Отмена</Btn><Btn kind="primary" disabled={!f.text.trim() || !f.place.trim()}
         onClick={() => { act.addIssue({ objectId: ctx.objectId, kind: f.kind, place: f.place.trim(), text: f.text.trim(), photos: f.photos, source: ctx.source, due: f.due, responsible: f.responsible }); toast('Замечание записано'); onClose(); }}>Записать</Btn></>}>
       <div className="form">
-        <p className="muted" style={{ fontSize: 13 }}>
-          {byId(d.objects, ctx.objectId)?.name}{ctx.source ? ` · связано с записью: ${ctx.source.label}` : ''}
-        </p>
-        <Field label="Что случилось">
-          <select className="select" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as IssueKind })}>
-            {(Object.keys(ISSUE_LABEL) as IssueKind[]).map((k) => <option key={k} value={k}>{ISSUE_LABEL[k]}</option>)}
-          </select>
+        <Field label="Что не так">
+          <VoiceArea label="Что не так" value={f.text} onChange={(text) => setF({ ...f, text })} placeholder="Коротко, можно надиктовать" />
         </Field>
-        <Field label="Место"><input className="input" value={f.place} onChange={(e) => setF({ ...f, place: e.target.value })} placeholder="Помещение, стена, зона" /></Field>
-        <Field label="Описание" help={canDictate() ? 'Можно надиктовать: нажмите на микрофон и проверьте текст перед сохранением.' : undefined}>
-          <VoiceArea label="Описание замечания" value={f.text} onChange={(text) => setF({ ...f, text })} placeholder="Коротко: что не так и что мешает" />
-        </Field>
+        <Field label="Где"><input className="input" value={f.place} onChange={(e) => setF({ ...f, place: e.target.value })} placeholder="Помещение, стена, зона" /></Field>
         <Photos count={f.photos} onChange={(n) => setF({ ...f, photos: n })} />
-        <div className="form-2">
-          <Field label="Срок, если есть"><input className="input" type="date" min={d.today} max={addDays(d.today, 365)} value={f.due} onChange={(e) => setF({ ...f, due: e.target.value })} /></Field>
+        <Details label="Вид, срок, ответственный">
+          <Field label="Вид">
+            <select className="select" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as IssueKind })}>
+              {(Object.keys(ISSUE_LABEL) as IssueKind[]).map((k) => <option key={k} value={k}>{ISSUE_LABEL[k]}</option>)}
+            </select>
+          </Field>
+          <Field label="Срок"><input className="input" type="date" min={d.today} max={addDays(d.today, 365)} value={f.due} onChange={(e) => setF({ ...f, due: e.target.value })} /></Field>
           <Field label="Ответственный">
             <select className="select" value={f.responsible} onChange={(e) => setF({ ...f, responsible: e.target.value })}>
               <option value="">Не назначен</option>
               {people.map((u) => <option key={u.id} value={u.name}>{u.name}</option>)}
             </select>
           </Field>
-        </div>
+          {ctx.source && <p className="muted">Связано с записью: {ctx.source.label}</p>}
+        </Details>
       </div>
     </Sheet>
   );
@@ -130,10 +128,10 @@ export function ShareButton({ path, title }: { path: string; title: string }) {
       <Btn small onClick={() => setOpen(true)} aria-label="Ссылка и QR-код"><QrCode size={16} /> Ссылка</Btn>
       <Sheet open={open} title={title} onClose={() => setOpen(false)} foot={<Btn kind="primary" onClick={copy}><Copy size={16} /> Скопировать ссылку</Btn>}>
         <div className="stack">
-          <p className="muted">Постоянный адрес этой карточки. Наведите камеру телефона на код, чтобы открыть её сразу. Код можно распечатать и повесить на месте хранения или приложить к поставке.</p>
+          
           <div className="qr" role="img" aria-label="QR-код со ссылкой на карточку" dangerouslySetInnerHTML={{ __html: svg }} />
           <input className="input" readOnly value={url} onFocus={(e) => e.target.select()} aria-label="Ссылка на карточку" />
-          <p className="muted" style={{ fontSize: 13 }}>Карточку увидит только тот, у кого есть доступ к этому рабочему месту.</p>
+          
         </div>
       </Sheet>
     </>

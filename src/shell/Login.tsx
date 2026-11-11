@@ -40,11 +40,7 @@ export function Login() {
   return (
     <main className="login">
       <div className="brand" style={{ fontWeight: 600, fontSize: 16 }}><Mark size={30} /> Базовый минимум</div>
-      <h1>Деньги, материалы и работы строительной группы в одном месте</h1>
-      <p className="lead">
-        У каждого участника своё рабочее место: прораб выполняет работу, менеджер обеспечивает потребность,
-        снабженец организует закупку, собственник видит картину бизнеса. Выберите, кем войти.
-      </p>
+      <h1>Кто вы?</h1>
       <div className="roles">
         {ENTRY.map((e) => {
           const u = d.users.find((x) => x.id === e.userId)!;
@@ -53,17 +49,14 @@ export function Login() {
               <Avatar user={u} />
               <span style={{ flex: 1, minWidth: 0 }}>
                 <span className="t" style={{ display: 'block' }}>{ROLE_LABEL[e.role]}</span>
-                <span className="s" style={{ display: 'block' }}>{u.name}. {ROLE_ABOUT[e.role]}</span>
+                <span className="s" style={{ display: 'block' }}>{ROLE_ABOUT[e.role]}</span>
               </span>
               <ChevronRight size={18} color="var(--faint)" />
             </button>
           );
         })}
       </div>
-      <p className="notice plain">
-        Это демонстрационная версия. Все люди, компании и суммы вымышлены. Данные хранятся только в вашем браузере:
-        то, что вы внесёте, увидите только вы на этом устройстве. Вернуть исходные данные можно в профиле.
-      </p>
+      <p className="muted" style={{ fontSize: 13 }}>Демо-версия: люди и суммы вымышлены, данные хранятся в этом браузере.</p>
       <Toaster />
     </main>
   );

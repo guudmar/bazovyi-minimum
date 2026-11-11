@@ -1,11 +1,13 @@
-// One purchase: what to buy and which need it came from, the supplier and terms, payment requests, history.
+// One purchase as three steps: supplier and price → ordered → shipped. One main button for the step the purchase is on;
+// terms, the invoice, a replacement material, the original request and the history are one tap deeper.
 import { useState, type ReactNode } from 'react';
 import { useParams } from 'react-router-dom';
+import { Check } from 'lucide-react';
 import { act, useData } from '../../data/store';
 import { byId, material, objectName, PURCHASE_LABEL, PURCHASE_TONE, REQUEST_LABEL, REQUEST_TONE } from '../../data/select';
-import { AmountInput, Btn, Card, Empty, Field, List, More, Page, Pill, RouteBar, Row, Sheet, toast } from '../../ui/kit';
+import { AmountInput, Btn, Card, Details, Empty, Field, List, Page, Pill, RouteBar, Row, Sheet, Status, toast } from '../../ui/kit';
 import { ShareButton } from '../../shared/extras';
-import { addDays, dFull, dRel, dShort, daysBetween, money, qty } from '../../lib/format';
+import { addDays, dFull, dShort, money, qty } from '../../lib/format';
 import type { Purchase } from '../../data/types';
 import { DELIVERY, dash, deliveryOf, rub, wantLate } from './lib';
 
@@ -41,10 +43,10 @@ export function PaySheet({ p, supplier, price, onClose }: { p: Purchase; supplie
     <Sheet open title="Запрос оплаты" onClose={onClose} dirty={dirty}
       foot={<><Btn onClick={onClose}>Отмена</Btn><Btn kind="primary" disabled={!ok} onClick={submit}>Отправить на согласование</Btn></>}>
       <div className="form">
-        <Field label="Сумма" help={price ? `${rub(price)} × ${qty(p.qty, m.unit)} = ${money(price * p.qty)}` : 'Цена в закупке не указана, введите сумму вручную.'}>
+        <Field label="Сумма" help={price ? `${rub(price)} × ${qty(p.qty, m.unit)} = ${money(price * p.qty)}` : 'Цена не указана, введите сумму.'}>
           <AmountInput value={amount} onChange={setAmount} />
         </Field>
-        <Field label="Основание"><textarea className="textarea" value={basis} onChange={(e) => setBasis(e.target.value)} /></Field>
+        <Field label="За что"><textarea className="textarea" value={basis} onChange={(e) => setBasis(e.target.value)} /></Field>
         <div className="form-2">
           <Field label="Оплатить до"><input className="input" type="date" min={d.today} value={due} onChange={(e) => setDue(e.target.value)} /></Field>
           <Field label="Кто платит">
@@ -53,13 +55,41 @@ export function PaySheet({ p, supplier, price, onClose }: { p: Purchase; supplie
             </select>
           </Field>
         </div>
-        <p className="muted" style={{ fontSize: 13 }}>Объект: {objectName(d, p.objectId)}. Статья: материалы. Заявка привязана к закупке, но сама по себе не означает оплату.</p>
+        <p className="muted" style={{ fontSize: 13 }}>Объект: {objectName(d, p.objectId)}. Статья: материалы.</p>
       </div>
     </Sheet>
   );
 }
 
-const QUEUE_PATH = { label: 'Очередь закупок', to: '/supplier/queue' };
+/** The three steps of a purchase, top to bottom: done ones are ticked, the current one is dark. */
+function Steps({ current, notes }: { current: number; notes: (ReactNode | undefined)[] }) {
+  const items = ['Поставщик и цена', 'Заказано', 'Отгружено'];
+  return (
+    <ol aria-label="Ход закупки" style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 10 }}>
+      {items.map((t, i) => {
+        const n = i + 1;
+        const done = n < current;
+        const now = n === current;
+        return (
+          <li key={t} aria-current={now ? 'step' : undefined} style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+            <span aria-hidden style={{
+              width: 24, height: 24, borderRadius: 12, flex: 'none', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 600,
+              background: done ? 'var(--pill-positive-bg)' : now ? 'var(--primary)' : 'transparent',
+              color: done ? 'var(--pill-positive-ink)' : now ? '#fff' : 'var(--muted)',
+              border: done || now ? 0 : '1px solid var(--control)',
+            }}>{done ? <Check size={14} /> : n}</span>
+            <span style={{ minWidth: 0, paddingTop: 2 }}>
+              <span style={{ fontWeight: now ? 600 : 500, color: done || now ? 'var(--text)' : 'var(--muted)' }}>{t}</span>
+              {notes[i] && <span className="muted" style={{ display: 'block', fontSize: 13 }}>{notes[i]}</span>}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+const PATH = { label: 'Закупки', to: '/supplier' };
 
 function PurchaseView({ p }: { p: Purchase }) {
   const d = useData();
@@ -97,69 +127,99 @@ function PurchaseView({ p }: { p: Purchase }) {
   const saveIfDirty = () => { if (dirty) act.updatePurchase(p.id, patch, `Обновлено: ${changes.join(', ')}`); };
   const canOrder = !!supplier && price > 0;
 
-  const save = () => { saveIfDirty(); toast('Условия закупки сохранены'); };
-  const take = () => { saveIfDirty(); act.setPurchaseStatus(p.id, 'sourcing'); toast(`Закупка № ${p.num} взята в работу`); };
-  const order = () => { saveIfDirty(); act.setPurchaseStatus(p.id, 'ordered'); toast(`Заказ размещён: ${supplier}`); };
-  const shipped = () => { saveIfDirty(); act.setPurchaseStatus(p.id, 'shipped'); toast('Отгрузка отмечена. Получение на объекте подтвердит прораб.'); };
+  const save = () => { saveIfDirty(); toast('Сохранено'); };
+  const take = () => { act.setPurchaseStatus(p.id, 'sourcing'); toast(`Закупка № ${p.num} взята в работу`); };
+  const order = () => { saveIfDirty(); act.setPurchaseStatus(p.id, 'ordered'); toast(`Заказано у «${supplier}»`); };
+  const shipped = () => { saveIfDirty(); act.setPurchaseStatus(p.id, 'shipped'); toast('Отгрузка отмечена. Получение подтвердит прораб.'); };
 
-  const days = daysBetween(d.today, p.wantDate);
-  const when = days < 0 ? `был нужен ${dShort(p.wantDate)}` : days === 0 ? 'нужен сегодня' : days === 1 ? 'нужен завтра' : `нужен к ${dShort(p.wantDate)}`;
-  const sub: Record<Purchase['status'], string> = {
-    new: `Закупка ещё не взята в работу, материал ${when}.`,
-    sourcing: p.supplier && p.price ? `Поставщик выбран, заказ ещё не размещён; материал ${when}.` : `Идёт подбор поставщика, материал ${when}.`,
-    ordered: `Заказ размещён${p.orderDate ? ` ${dShort(p.orderDate)}` : ''}, ${
-      p.eta ? `поставщик обещает ${dShort(p.eta)}${p.eta > p.wantDate ? ', это позже нужного срока' : ''}` : 'срок поставки не назван'}.`,
-    shipped: `Поставщик отгрузил, на объекте ждут ${p.eta ? dRel(p.eta, d.today).toLowerCase() : 'в ближайшие дни'}.`,
-    received: 'Материал получен на объекте, закупка закрыта.',
-  };
-  // one primary step per status; while a supplier is being chosen it sits under the form, where the answer is typed
-  const step: ReactNode =
-    p.status === 'new' ? <Btn kind="primary" onClick={take}>Взять в работу</Btn>
-      : p.status === 'ordered' ? <Btn kind="primary" onClick={shipped}>Поставщик отгрузил</Btn>
-        : p.status === 'shipped' ? <span className="muted">Ждём подтверждения получения от прораба</span>
-          : p.status === 'received' ? <span className="muted">Получено на объекте</span>
-            : undefined;
+  const current = p.status === 'new' || p.status === 'sourcing' ? 1 : p.status === 'ordered' ? 2 : p.status === 'shipped' ? 3 : 4;
+  const notes: (ReactNode | undefined)[] = [
+    current > 1 && p.supplier ? `${p.supplier}${p.price !== undefined ? `, ${rub(p.price)} за ${m.unit}` : ''}` : undefined,
+    current >= 2 ? <>заказано{p.orderDate ? ` ${dShort(p.orderDate)}` : ''}{p.eta && current === 2 ? <>, обещают <span className={p.eta > p.wantDate ? 'neg' : ''}>{dShort(p.eta)}</span></> : ''}</> : undefined,
+    current === 3 ? 'ждём, когда прораб примет' : current === 4 ? `прораб принял${dl?.receivedAt ? ` ${dShort(dl.receivedAt)}` : ''}` : undefined,
+  ];
+
+  const main: ReactNode =
+    current === 1 ? <Btn kind="primary" disabled={!canOrder} onClick={order}>Сохранить и заказать</Btn>
+      : current === 2 ? <Btn kind="primary" onClick={shipped}>Поставщик отгрузил</Btn>
+        : current === 3 ? <Status kind="wait">Ждём, когда прораб примет</Status>
+          : <Status kind="done">Получено на объекте</Status>;
 
   return (
-    <Page title={label} sub={sub[p.status]} path={[QUEUE_PATH, { label: `№ ${p.num}` }]}
-      actions={<><ShareButton path={`/supplier/purchase/${p.id}`} title={label} />{step}</>}>
+    <Page title={label} path={[PATH, { label: `№ ${p.num}` }]}>
       <Card title={m.name} action={<Pill tone={PURCHASE_TONE[p.status]}>{PURCHASE_LABEL[p.status]}</Pill>}>
-        <div className="stack" style={{ gap: 14 }}>
-          <dl className="kv left">
-            <dt>Количество</dt><dd>{qty(p.qty, m.unit)}</dd>
-            <dt>Объект</dt><dd>{objectName(d, p.objectId)}</dd>
-            <dt>Нужно к</dt><dd className={wantLate(d, p) ? 'neg' : ''}>{dFull(p.wantDate)}</dd>
-            <dt>Причина</dt><dd>{p.reason}</dd>
-            <dt>Приоритет</dt><dd>{p.priority === 'high' ? <Pill tone="negative">Высокий</Pill> : 'Обычный'}</dd>
-          </dl>
-          <hr className="divider" />
-          {need && line ? (
-            <div>
-              <div style={{ marginBottom: 8 }}>
-                Исходная потребность № {need.num}: всего {qty(line.qty, m.unit)}, эта часть {qty(p.qty, m.unit)}
-              </div>
-              <RouteBar line={line} legend />
-            </div>
-          ) : <p className="muted">Исходная потребность не найдена.</p>}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <b className="num" style={{ fontWeight: 600 }}>{qty(p.qty, m.unit)}</b>
+          <span>· {objectName(d, p.objectId)} · нужно к <span className={wantLate(d, p) ? 'neg' : ''}>{dShort(p.wantDate)}</span></span>
+          {p.priority === 'high' && p.status !== 'received' && <Status kind="problem">Срочно</Status>}
         </div>
       </Card>
 
-      <Card title="Поставщик и условия">
+      <Card>
+        <div className="stack" style={{ gap: 16 }}>
+          <Steps current={current} notes={notes} />
+          {editable ? (
+            <div className="form">
+              <Field label="Поставщик">
+                <input className="input" list="supplier-known-suppliers" value={f.supplier} onChange={(e) => set({ supplier: e.target.value })} placeholder="Название поставщика" />
+                <datalist id="supplier-known-suppliers">{known.map((s) => <option key={s} value={s} />)}</datalist>
+              </Field>
+              <div className="form-2">
+                <Field label={`Цена за ${m.unit}, ₽`} help={`По справочнику ${rub(m.price)}`}>
+                  <input className="input num" inputMode="decimal" value={f.price} placeholder="0"
+                    onChange={(e) => set({ price: e.target.value.replace(/[^\d.,\s]/g, '') })} />
+                </Field>
+                <Field label="Срок поставки" help={f.eta && f.eta > p.wantDate ? `Позже нужного срока, ${dShort(p.wantDate)}` : undefined}>
+                  <input className="input" type="date" value={f.eta} onChange={(e) => set({ eta: e.target.value })} />
+                </Field>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
+                <span className="muted num">Сумма{price ? `: ${rub(price)} × ${qty(p.qty, m.unit)}` : ''}</span>
+                <span className="num" style={{ fontSize: 18, fontWeight: 700 }}>{price ? money(price * p.qty) : dash}</span>
+              </div>
+            </div>
+          ) : (
+            <dl className="kv left">
+              <dt>Поставщик</dt><dd>{p.supplier ?? dash}</dd>
+              <dt>Сумма</dt><dd>{p.price !== undefined ? `${money(p.price * p.qty)} (${rub(p.price)} за ${m.unit})` : dash}</dd>
+              {dl && dlLine && (
+                <>
+                  <dt>Поставка</dt><dd>№ {dl.num} <Pill tone={DELIVERY[dl.status].tone}>{DELIVERY[dl.status].label}</Pill></dd>
+                  <dt>{dl.status === 'expected' ? 'Ждут на объекте' : 'Получено'}</dt>
+                  <dd>
+                    {dl.status === 'expected'
+                      ? <span className={dl.eta < d.today ? 'neg' : ''}>{dFull(dl.eta)}</span>
+                      : <span className={(dlLine.received ?? 0) < dlLine.qty ? 'neg' : ''}>{qty(dlLine.received ?? 0, m.unit)} из {qty(dlLine.qty, m.unit)}</span>}
+                  </dd>
+                </>
+              )}
+            </dl>
+          )}
+          <div className="btn-row" style={{ alignItems: 'center' }}>
+            {main}
+            {dirty && <Btn onClick={save}>Сохранить</Btn>}
+            {p.status === 'new' && !dirty && <Btn onClick={take}>Взять в работу</Btn>}
+            <Btn onClick={() => setPay(true)}>Запросить оплату</Btn>
+          </div>
+          {current === 1 && !canOrder && <p className="muted" style={{ fontSize: 13 }}>Чтобы заказать, укажите поставщика и цену.</p>}
+        </div>
+      </Card>
+
+      {reqs.length > 0 && (
+        <Card title="Оплата" flush>
+          <List>
+            {reqs.map((r) => (
+              <Row key={r.id} to="/supplier?view=pay" title={money(r.amount)} sub={`№ ${r.num} · оплатить до ${dShort(r.due)}`}
+                meta={<Pill tone={REQUEST_TONE[r.status]}>{REQUEST_LABEL[r.status]}</Pill>} />
+            ))}
+          </List>
+        </Card>
+      )}
+
+      <Details>
+        <div><ShareButton path={`/supplier/purchase/${p.id}`} title={label} /></div>
         {editable ? (
           <div className="form">
-            <Field label="Поставщик">
-              <input className="input" list="supplier-known-suppliers" value={f.supplier} onChange={(e) => set({ supplier: e.target.value })} placeholder="Название поставщика" />
-              <datalist id="supplier-known-suppliers">{known.map((s) => <option key={s} value={s} />)}</datalist>
-            </Field>
-            <div className="form-2">
-              <Field label={`Цена за ${m.unit}, ₽`} help={`По справочнику ${rub(m.price)}`}>
-                <input className="input num" inputMode="decimal" value={f.price} placeholder="0"
-                  onChange={(e) => set({ price: e.target.value.replace(/[^\d.,\s]/g, '') })} />
-              </Field>
-              <Field label="Срок поставки" help={f.eta && f.eta > p.wantDate ? `Позже нужного срока, ${dShort(p.wantDate)}` : undefined}>
-                <input className="input" type="date" value={f.eta} onChange={(e) => set({ eta: e.target.value })} />
-              </Field>
-            </div>
             <Field label="Условия">
               <input className="input" value={f.terms} onChange={(e) => set({ terms: e.target.value })} placeholder="Например: оплата по счёту, самовывоз" />
             </Field>
@@ -167,73 +227,44 @@ function PurchaseView({ p }: { p: Purchase }) {
               <input type="checkbox" checked={f.invoice} onChange={(e) => set({ invoice: e.target.checked })} style={{ width: 18, height: 18, accentColor: 'var(--primary)' }} />
               Счёт приложен
             </label>
-            <Field label="Альтернативный материал" help="Замена требует согласования с прорабом.">
+            <Field label="Замена материала" help="Замену согласуют с прорабом.">
               <input className="input" value={f.alt} onChange={(e) => set({ alt: e.target.value })} placeholder="Если точной позиции нет" />
             </Field>
-            <hr className="divider" />
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
-              <span className="muted num">Сумма{price ? `: ${rub(price)} × ${qty(p.qty, m.unit)}` : ''}</span>
-              <span className="num" style={{ fontSize: 18, fontWeight: 700 }}>{price ? money(price * p.qty) : dash}</span>
-            </div>
-            <div className="btn-row">
-              <Btn disabled={!dirty} onClick={save}>Сохранить</Btn>
-              {p.status === 'sourcing' && <Btn kind="primary" disabled={!canOrder} onClick={order}>Разместить заказ</Btn>}
-            </div>
-            {p.status === 'sourcing' && !canOrder && <p className="muted" style={{ fontSize: 13 }}>Чтобы разместить заказ, укажите поставщика и цену.</p>}
+            {dirty && <div><Btn onClick={save}>Сохранить</Btn></div>}
           </div>
         ) : (
           <dl className="kv left">
-            <dt>Поставщик</dt><dd>{p.supplier ?? dash}</dd>
-            <dt>Цена за {m.unit}</dt><dd>{p.price !== undefined ? rub(p.price) : dash}</dd>
-            <dt>Сумма</dt><dd>{p.price !== undefined ? money(p.price * p.qty) : dash}</dd>
             <dt>Условия</dt><dd>{p.terms ?? dash}</dd>
-            <dt>Заказан</dt><dd>{p.orderDate ? dFull(p.orderDate) : dash}</dd>
-            <dt>Срок поставки</dt><dd>{p.eta ? dFull(p.eta) : dash}</dd>
             <dt>Счёт</dt><dd>{p.invoice ? 'Приложен' : 'Не приложен'}</dd>
             <dt>Замена</dt><dd>{p.alt ?? dash}</dd>
+            <dt>Заказано</dt><dd>{p.orderDate ? dFull(p.orderDate) : dash}</dd>
+            <dt>Срок поставки</dt><dd>{p.eta ? dFull(p.eta) : dash}</dd>
           </dl>
         )}
-      </Card>
-
-      {dl && dlLine && (
-        <Card title={`Поставка № ${dl.num}`} action={<Pill tone={DELIVERY[dl.status].tone}>{DELIVERY[dl.status].label}</Pill>}>
-          <div className="stack" style={{ gap: 10 }}>
-            <dl className="kv left">
-              <dt>{dl.status === 'expected' ? 'Ждут на объекте' : 'Получена'}</dt>
-              <dd className={dl.status === 'expected' && dl.eta < d.today ? 'neg' : ''}>{dFull(dl.status === 'expected' ? dl.eta : dl.receivedAt ?? dl.eta)}</dd>
-              <dt>Отправлено</dt><dd>{qty(dlLine.qty, m.unit)}</dd>
-              <dt>Получено</dt>
-              <dd>{dlLine.received === undefined
-                ? <span className="muted">прораб ещё не подтвердил</span>
-                : <span className={dlLine.received < dlLine.qty ? 'neg' : ''}>{qty(dlLine.received, m.unit)}</span>}</dd>
+        <dl className="kv left">
+          <dt>Причина</dt><dd>{p.reason}</dd>
+          <dt>Нужно к</dt><dd className={wantLate(d, p) ? 'neg' : ''}>{dFull(p.wantDate)}</dd>
+          {dl && dlLine && (
+            <>
               <dt>В документе отгрузки</dt><dd>{dlLine.sourceName ? `${dlLine.sourceName}${dlLine.sourceCode ? `, код ${dlLine.sourceCode}` : ''}` : dash}</dd>
               <dt>Место хранения</dt><dd>{dl.place ?? dash}</dd>
               <dt>Комментарий прораба</dt><dd>{dl.comment ?? dash}</dd>
-            </dl>
-            <p className="muted" style={{ fontSize: 13 }}>Отправка ещё не получение: закупка закроется, когда прораб подтвердит получение на объекте.</p>
-            <div><More to="/supplier/deliveries">Все поставки</More></div>
+            </>
+          )}
+        </dl>
+        {need && line ? (
+          <div>
+            <div style={{ marginBottom: 8 }}>Заявка № {need.num}: всего {qty(line.qty, m.unit)}, эта часть {qty(p.qty, m.unit)}</div>
+            <RouteBar line={line} legend />
           </div>
-        </Card>
-      )}
-
-      <Card title="Оплата" action={<Btn onClick={() => setPay(true)}>Запросить оплату</Btn>} flush>
-        {reqs.length ? (
-          <List>
-            {reqs.map((r) => (
-              <Row key={r.id} to="/supplier/money" title={r.basis} sub={`№ ${r.num} от ${dShort(r.date)} · оплатить до ${dShort(r.due)}`}
-                value={money(r.amount)} money meta={<Pill tone={REQUEST_TONE[r.status]}>{REQUEST_LABEL[r.status]}</Pill>} />
-            ))}
-          </List>
-        ) : <Empty>По этой закупке оплату ещё не запрашивали.</Empty>}
-      </Card>
-
-      <Card title="История">
+        ) : <p className="muted">Исходная заявка не найдена.</p>}
+        <div className="section-title">История</div>
         {p.history.length ? (
           <div className="stack" style={{ gap: 6 }}>
             {p.history.map((h, i) => <p key={i}><span className="muted">{dShort(h.at)}, {h.by}:</span> {h.text}</p>)}
           </div>
-        ) : <Empty>Событий по закупке пока нет.</Empty>}
-      </Card>
+        ) : <p className="muted">Событий пока нет.</p>}
+      </Details>
 
       {pay && <PaySheet p={p} supplier={supplier} price={price} onClose={() => setPay(false)} />}
     </Page>
@@ -246,8 +277,8 @@ export function PurchasePage() {
   const p = byId(d.purchases, id);
   if (!p) {
     return (
-      <Page title="Закупка" path={[QUEUE_PATH, { label: 'Не найдена' }]}>
-        <Card><Empty>Такой закупки нет. В очереди можно выбрать другую.</Empty></Card>
+      <Page title="Закупка" path={[PATH, { label: 'Не найдена' }]}>
+        <Card><Empty>Такой закупки нет.</Empty></Card>
       </Page>
     );
   }

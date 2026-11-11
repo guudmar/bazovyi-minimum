@@ -108,23 +108,21 @@ export function forecast(d: Data, days = 14, s: Scope = {}): ForecastDay[] {
 }
 
 export const REQUEST_LABEL: Record<RequestStatus, string> = {
-  pending: 'На согласовании', approved: 'Согласована', noted: 'Согласована с замечаниями',
-  clarify: 'Нужно уточнение', rejected: 'Отклонена', paid: 'Оплачена',
+  pending: 'Ждёт решения', approved: 'К оплате', noted: 'К оплате', clarify: 'Нужен ответ', rejected: 'Отклонена', paid: 'Оплачена',
 };
 export const REQUEST_TONE: Record<RequestStatus, Tone> = {
-  pending: 'warning', approved: 'hue', noted: 'hue', clarify: 'warning', rejected: 'negative', paid: 'positive',
+  pending: 'warning', approved: 'hue', noted: 'hue', clarify: 'negative', rejected: 'neutral', paid: 'positive',
 };
 export type Tone = 'neutral' | 'positive' | 'negative' | 'warning' | 'hue';
 
 /* --------------------------------------------------------- needs & supply */
 
 export const ROUTE_LABEL: Record<Route, string> = {
-  stock: 'Со склада', order: 'Заказ через торговое направление', supplier: 'Снабженец', clarify: 'Уточнение у прораба',
+  stock: 'Со склада', order: 'Заказ', supplier: 'Через снабженца', clarify: 'Вопрос прорабу',
 };
-export const ROUTE_SHORT: Record<Route, string> = { stock: 'склад', order: 'заказ', supplier: 'снабженец', clarify: 'уточнение' };
+export const ROUTE_SHORT: Record<Route, string> = { stock: 'склад', order: 'заказ', supplier: 'снабженец', clarify: 'вопрос' };
 export const PART_LABEL: Record<PartStatus, string> = {
-  reserved: 'Зарезервировано на складе', ordered: 'Заказано для склада', handed: 'У снабженца',
-  shipped: 'В пути на объект', received: 'Получено', clarify: 'Ждёт ответа прораба',
+  reserved: 'Отложено на складе', ordered: 'Заказано', handed: 'У снабженца', shipped: 'Едет', received: 'Получено', clarify: 'Нужен ответ прораба',
 };
 
 export interface LineStats { allocated: number; open: number; received: number; shipped: number; pending: number }
@@ -150,11 +148,10 @@ export function lineState(l: NeedLine): LineState {
   return 'stock';
 }
 export const LINE_LABEL: Record<LineState, string> = {
-  check: 'Проверяется наличие', stock: 'Доступно на складе', order: 'Ожидается заказ', handed: 'Передано снабженцу',
-  shipping: 'Ожидается поставка', partial: 'Частично обеспечено', clarify: 'Требуется уточнение', done: 'Обеспечено',
+  check: 'Ждёт', stock: 'Есть на складе', order: 'Заказано', handed: 'Заказано', shipping: 'Едет', partial: 'Частично', clarify: 'Нужен ответ', done: 'Получено',
 };
 export const LINE_TONE: Record<LineState, Tone> = {
-  check: 'neutral', stock: 'neutral', order: 'neutral', handed: 'neutral', shipping: 'hue', partial: 'warning', clarify: 'warning', done: 'positive',
+  check: 'warning', stock: 'hue', order: 'hue', handed: 'hue', shipping: 'hue', partial: 'hue', clarify: 'negative', done: 'positive',
 };
 
 export type NeedState = 'new' | 'work' | 'clarify' | 'done';
@@ -165,8 +162,8 @@ export function needState(n: Need): NeedState {
   if (n.lines.every((l) => l.parts.length === 0)) return 'new';
   return 'work';
 }
-export const NEED_LABEL: Record<NeedState, string> = { new: 'Новая', work: 'В работе', clarify: 'Ждёт уточнения', done: 'Обеспечена' };
-export const NEED_TONE: Record<NeedState, Tone> = { new: 'hue', work: 'neutral', clarify: 'warning', done: 'positive' };
+export const NEED_LABEL: Record<NeedState, string> = { new: 'Ждёт', work: 'В работе', clarify: 'Нужен ответ', done: 'Готово' };
+export const NEED_TONE: Record<NeedState, Tone> = { new: 'warning', work: 'hue', clarify: 'negative', done: 'positive' };
 /** Share of the need that has physically arrived, by quantity of each line. */
 export function needProgress(n: Need): number {
   const parts = n.lines.map((l) => Math.min(1, lineStats(l).received / l.qty));
@@ -215,10 +212,10 @@ export const MOVE_LABEL: Record<SiteMove['kind'], string> = {
 };
 
 export const PURCHASE_LABEL: Record<Purchase['status'], string> = {
-  new: 'Новая', sourcing: 'Подбор поставщика', ordered: 'Заказано', shipped: 'В пути', received: 'Получено',
+  new: 'Новая', sourcing: 'Ищем поставщика', ordered: 'Заказано', shipped: 'Едет', received: 'Получено',
 };
 export const PURCHASE_TONE: Record<Purchase['status'], Tone> = {
-  new: 'hue', sourcing: 'warning', ordered: 'neutral', shipped: 'hue', received: 'positive',
+  new: 'warning', sourcing: 'hue', ordered: 'hue', shipped: 'hue', received: 'positive',
 };
 
 /* ------------------------------------------------------------------ works */
@@ -242,9 +239,9 @@ export function workState(w: Work, today: string): WorkState {
   return done > 0 ? 'progress' : 'todo';
 }
 export const WORK_LABEL: Record<WorkState, string> = {
-  accepted: 'Принято', done: 'Выполнено, не принято', late: 'Срок прошёл', progress: 'В работе', todo: 'Не начато',
+  accepted: 'Принято', done: 'Ждёт приёмки', late: 'Срок прошёл', progress: 'В работе', todo: 'Не начато',
 };
-export const WORK_TONE: Record<WorkState, Tone> = { accepted: 'positive', done: 'hue', late: 'negative', progress: 'neutral', todo: 'neutral' };
+export const WORK_TONE: Record<WorkState, Tone> = { accepted: 'positive', done: 'warning', late: 'negative', progress: 'hue', todo: 'neutral' };
 export const round1 = (v: number): number => Math.round(v * 10) / 10;
 
 export const roomFloor = (r: { length: number; width: number }): number => round1(r.length * r.width);
@@ -300,33 +297,36 @@ export function tasksFor(d: Data, u: User): Task[] {
   const mine = new Set(u.objectIds ?? []);
   if (u.role === 'foreman') {
     for (const dl of d.deliveries.filter((x) => x.status === 'expected' && mine.has(x.objectId) && x.eta <= d.today))
-      t.push({ id: dl.id, title: `Подтвердить получение: ${dl.source}`, sub: `${objectName(d, dl.objectId)} · ${count(dl.lines.length, 'позиция', 'позиции', 'позиций')}`, to: `/foreman/deliveries/${dl.id}`, tone: 'hue' });
+      t.push({ id: dl.id, title: `Принять поставку: ${dl.source}`, sub: `${objectName(d, dl.objectId)} · ${count(dl.lines.length, 'позиция', 'позиции', 'позиций')}`, to: `/foreman/deliveries/${dl.id}`, tone: 'hue' });
     for (const f of d.floors.filter((x) => mine.has(x.objectId))) {
       const v = currentGeo(d, f.objectId, f.name);
       if (v?.status === 'draft' && roomsOn(d, f.objectId, f.name).length)
-        t.push({ id: v.id, title: `Передать геометрию на проверку: ${f.name}`, sub: `${objectName(d, f.objectId)} · версия ${v.num}${v.note ? ' · возвращена: ' + v.note : v.reason ? ' · ' + v.reason : ''}`, to: '/foreman/geometry', tone: v.note ? 'warning' : 'neutral' });
+        t.push({ id: v.id, title: `Отправить замеры на проверку: ${f.name}`, sub: `${objectName(d, f.objectId)}${v.note ? ' · вернули: ' + v.note : v.reason ? ' · ' + v.reason : ''}`, to: '/foreman/geometry', tone: v.note ? 'warning' : 'neutral' });
     }
     for (const n of d.needs.filter((x) => mine.has(x.objectId) && x.question && !x.question.answer))
-      t.push({ id: n.id, title: `Ответить менеджеру по потребности № ${n.num}`, sub: n.question!.text, to: `/foreman/needs/${n.id}`, tone: 'warning' });
+      t.push({ id: n.id, title: `Ответить менеджеру по заявке № ${n.num}`, sub: n.question!.text, to: `/foreman/needs/${n.id}`, tone: 'warning' });
     for (const w of d.works.filter((x) => mine.has(x.objectId))) {
       const st = workState(w, d.today);
       if (st === 'late') t.push({ id: w.id, title: `Срок прошёл: ${w.name}`, sub: `${objectName(d, w.objectId)} · выполнено ${qty(workDone(w), w.unit)} из ${qty(w.plan, w.unit)}`, to: '/foreman/works', tone: 'negative' });
-      else if (workToPresent(d, w) > 0) t.push({ id: w.id, title: `Предъявить к приёмке: ${w.name}`, sub: `${objectName(d, w.objectId)} · ${qty(workToPresent(d, w), w.unit)} без акта`, to: '/foreman/fact', tone: 'neutral' });
+      else if (workToPresent(d, w) > 0) t.push({ id: w.id, title: `Сдать работу: ${w.name}`, sub: `${objectName(d, w.objectId)} · ${qty(workToPresent(d, w), w.unit)} без акта`, to: '/foreman/works', tone: 'neutral' });
     }
   }
   if (u.role === 'owner') {
     for (const r of d.requests.filter((x) => x.status === 'pending'))
       t.push({ id: r.id, title: `Согласовать: ${money(r.amount)}`, sub: `${r.basis} · оплатить до ${dShort(r.due)}`, to: '/owner/approvals', tone: 'warning' });
     for (const o of transits(d).filter((x) => daysBetween(x.date, d.today) >= 2))
-      t.push({ id: o.id, title: `Перевод ${money(o.amount)} ${transitAge(d, o)}`, sub: `${byId(d.registers, o.registerId)?.name} → ${byId(d.registers, o.toRegisterId)?.name}`, to: '/owner/finance', tone: 'negative' });
+      t.push({ id: o.id, title: `Перевод ${money(o.amount)} ${transitAge(d, o)}`, sub: `${byId(d.registers, o.registerId)?.name} → ${byId(d.registers, o.toRegisterId)?.name}`, to: '/owner/money', tone: 'negative' });
   }
   if (u.role === 'manager') {
     for (const n of d.needs.filter((x) => needOpenQty(x) > 0))
-      t.push({ id: n.id, title: `Распределить потребность № ${n.num}`, sub: `${objectName(d, n.objectId)} · ${count(n.lines.filter((l) => lineStats(l).open > 0).length, 'позиция', 'позиции', 'позиций')} без маршрута`, to: `/manager/needs/${n.id}`, tone: n.urgent ? 'negative' : 'hue' });
+      t.push({ id: n.id, title: `Обеспечить заявку № ${n.num}`, sub: `${objectName(d, n.objectId)} · ${count(n.lines.filter((l) => lineStats(l).open > 0).length, 'позиция', 'позиции', 'позиций')} не обеспечено`, to: `/manager/needs/${n.id}`, tone: n.urgent ? 'negative' : 'hue' });
+    // what is already held on the warehouse for a site and only waits to be sent
+    for (const n of d.needs.filter((x) => x.lines.some((l) => l.parts.some((p) => p.status === 'reserved'))))
+      t.push({ id: n.id + 's', title: `Отправить на объект: заявка № ${n.num}`, sub: `${objectName(d, n.objectId)} · отложено на складе`, to: `/manager/needs/${n.id}`, tone: 'hue' });
     for (const o of d.tradeOrders.filter((x) => x.status === 'delayed'))
       t.push({ id: o.id, title: `Задержка заказа № ${o.num}: ${o.supplier}`, sub: `${material(d, o.materialId).name} · ждали ${dShort(o.eta)}`, to: `/manager/orders?open=${o.id}`, tone: 'negative' });
     for (const n of d.needs.filter((x) => x.question?.answer && x.lines.some((l) => l.parts.some((p) => p.status === 'clarify'))))
-      t.push({ id: n.id + 'a', title: `Прораб ответил по потребности № ${n.num}`, sub: n.question!.answer!, to: `/manager/needs/${n.id}`, tone: 'hue' });
+      t.push({ id: n.id + 'a', title: `Прораб ответил по заявке № ${n.num}`, sub: n.question!.answer!, to: `/manager/needs/${n.id}`, tone: 'hue' });
   }
   if (u.role === 'supplier') {
     for (const p of d.purchases.filter((x) => x.status === 'new'))
@@ -336,18 +336,18 @@ export function tasksFor(d: Data, u: User): Task[] {
   }
   if (u.role === 'admin') {
     for (const o of transits(d))
-      t.push({ id: o.id, title: `Подтвердить получение перевода ${money(o.amount)}`, sub: `${byId(d.registers, o.registerId)?.name} → ${byId(d.registers, o.toRegisterId)?.name} · отправлен ${dShort(o.date)}`, to: '/admin/transits', tone: daysBetween(o.date, d.today) >= 2 ? 'negative' : 'warning' });
+      t.push({ id: o.id, title: `Подтвердить перевод ${money(o.amount)}`, sub: `${byId(d.registers, o.registerId)?.name} → ${byId(d.registers, o.toRegisterId)?.name} · отправлен ${dShort(o.date)}`, to: '/admin/money?tab=transfers', tone: daysBetween(o.date, d.today) >= 2 ? 'negative' : 'warning' });
     const unmatched = d.operations.filter((o) => o.bank === 'unmatched');
-    if (unmatched.length) t.push({ id: 'bank', title: `Сопоставить с банком: ${count(unmatched.length, 'операция', 'операции', 'операций')}`, sub: `На сумму ${money(unmatched.reduce((s, o) => s + o.amount, 0))}`, to: '/admin/transits', tone: 'warning' });
+    if (unmatched.length) t.push({ id: 'bank', title: `Сверить с банком: ${count(unmatched.length, 'операция', 'операции', 'операций')}`, sub: `На сумму ${money(unmatched.reduce((s, o) => s + o.amount, 0))}`, to: '/admin/money?tab=transfers', tone: 'warning' });
     for (const r of d.requests.filter((x) => x.status === 'approved' || x.status === 'noted'))
       t.push({ id: r.id, title: `Оплатить согласованную заявку № ${r.num}`, sub: `${money(r.amount)} · ${r.basis}`, to: '/admin/requests', tone: r.due <= d.today ? 'negative' : 'hue' });
     for (const f of d.floors) {
       const v = currentGeo(d, f.objectId, f.name);
       if (v?.status === 'review')
-        t.push({ id: v.id, title: `Проверить геометрию: ${objectName(d, f.objectId)}, ${f.name}`, sub: `версия ${v.num} · передана ${dShort(v.sentAt ?? v.createdAt)}`, to: `/admin/objects/${f.objectId}?tab=geometry`, tone: 'hue' });
+        t.push({ id: v.id, title: `Проверить замеры: ${objectName(d, f.objectId)}, ${f.name}`, sub: `версия ${v.num} · передана ${dShort(v.sentAt ?? v.createdAt)}`, to: `/admin/objects/${f.objectId}?tab=geometry`, tone: 'hue' });
     }
     const queue = d.sources.filter((x) => x.status !== 'matched');
-    if (queue.length) t.push({ id: 'catalog', title: `Разобрать номенклатуру: ${count(queue.length, 'позиция', 'позиции', 'позиций')}`, sub: queue.slice(0, 2).map((x) => x.name).join('; '), to: '/admin/refs?tab=queue', tone: 'neutral' });
+    if (queue.length) t.push({ id: 'catalog', title: `Новые позиции поставщиков: ${count(queue.length, 'позиция', 'позиции', 'позиций')}`, sub: queue.slice(0, 2).map((x) => x.name).join('; '), to: '/admin/refs?tab=queue', tone: 'neutral' });
     for (const a of d.avrs.filter((x) => x.status === 'review'))
       t.push({ id: a.id, title: `Проверить АВР № ${a.num}`, sub: `${objectName(d, a.objectId)} · от ${dShort(a.date)}`, to: `/admin/objects/${a.objectId}?tab=avr`, tone: 'hue' });
   }
@@ -362,9 +362,9 @@ export function noticesFor(d: Data, u: User): Notice[] {
   if (u.role === 'owner' || u.role === 'admin') {
     const fc = forecast(d, 14);
     const low = fc.reduce((a, b) => (b.balance < a.balance ? b : a), fc[0]);
-    if (low && low.balance < 0) n.push({ id: 'gap', at: d.today, title: `Кассовый разрыв ${dShort(low.date)}`, sub: `Прогноз остатка ${money(low.balance)}`, to: u.role === 'owner' ? '/owner/calendar' : '/admin/planning' });
+    if (low && low.balance < 0) n.push({ id: 'gap', at: d.today, title: `Кассовый разрыв ${dShort(low.date)}`, sub: `Прогноз остатка ${money(low.balance)}`, to: u.role === 'owner' ? '/owner/money?tab=calendar' : '/admin/money?tab=plan' });
     for (const o of d.tradeOrders.filter((x) => x.status === 'delayed'))
-      n.push({ id: o.id, at: o.eta, title: `Задержка поставки: ${material(d, o.materialId).name}`, sub: `${o.supplier}, заказ № ${o.num}. Срок был ${dShort(o.eta)}`, to: u.role === 'owner' ? '/owner/objects' : '/admin/processes' });
+      n.push({ id: o.id, at: o.eta, title: `Задержка поставки: ${material(d, o.materialId).name}`, sub: `${o.supplier}, заказ № ${o.num}. Срок был ${dShort(o.eta)}`, to: u.role === 'owner' ? '/owner/objects' : '/admin' });
     for (const o of d.objects) {
       const v = objectView(d, o);
       if (v.spent > o.planCost) n.push({ id: o.id, at: d.today, title: `Превышен бюджет: ${o.name}`, sub: `Затраты ${money(v.spent)} при плане ${money(o.planCost)}`, to: u.role === 'owner' ? '/owner/objects' : `/admin/objects/${o.id}` });
@@ -375,27 +375,27 @@ export function noticesFor(d: Data, u: User): Notice[] {
   if (u.role === 'foreman') {
     for (const need of d.needs.filter((x) => mine.has(x.objectId))) {
       for (const l of need.lines) for (const p of l.parts.filter((x) => x.status === 'shipped'))
-        n.push({ id: p.id, at: p.eta ?? need.date, title: `Едет на объект: ${material(d, l.materialId).name}`, sub: `${qty(p.qty, material(d, l.materialId).unit)} · потребность № ${need.num}`, to: '/foreman/deliveries' });
-      if (need.question && !need.question.answer) n.push({ id: need.id + 'q', at: need.date, title: `Вопрос по потребности № ${need.num}`, sub: `${need.question.by}: ${need.question.text}`, to: `/foreman/needs/${need.id}` });
+        n.push({ id: p.id, at: p.eta ?? need.date, title: `Едет на объект: ${material(d, l.materialId).name}`, sub: `${qty(p.qty, material(d, l.materialId).unit)} · заявка № ${need.num}`, to: '/foreman/materials?tab=deliveries' });
+      if (need.question && !need.question.answer) n.push({ id: need.id + 'q', at: need.date, title: `Вопрос по заявке № ${need.num}`, sub: `${need.question.by}: ${need.question.text}`, to: `/foreman/needs/${need.id}` });
     }
     for (const v of d.geoVersions.filter((x) => mine.has(x.objectId) && (x.status === 'confirmed' || (x.status === 'draft' && x.note))))
-      n.push({ id: v.id, at: v.confirmedAt ?? v.createdAt, title: v.status === 'confirmed' ? `Геометрия подтверждена: ${v.floor}, версия ${v.num}` : `Геометрия возвращена на доработку: ${v.floor}`, sub: `${objectName(d, v.objectId)}${v.note ? ' · ' + v.note : ''}`, to: '/foreman/geometry' });
+      n.push({ id: v.id, at: v.confirmedAt ?? v.createdAt, title: v.status === 'confirmed' ? `Замеры приняты: ${v.floor}` : `Замеры вернули на доработку: ${v.floor}`, sub: `${objectName(d, v.objectId)}${v.note ? ' · ' + v.note : ''}`, to: '/foreman/geometry' });
     for (const a of d.avrs.filter((x) => mine.has(x.objectId) && x.status !== 'review'))
-      n.push({ id: a.id, at: a.date, title: `АВР № ${a.num}: ${a.status === 'accepted' ? 'объёмы приняты' : 'возвращён на доработку'}`, sub: objectName(d, a.objectId), to: '/foreman/fact' });
+      n.push({ id: a.id, at: a.date, title: `Акт № ${a.num}: ${a.status === 'accepted' ? 'объёмы приняты' : 'возвращён на доработку'}`, sub: objectName(d, a.objectId), to: '/foreman/works' });
     for (const r of d.requests.filter((x) => x.authorId === u.id && x.decisions.length))
-      n.push({ id: r.id, at: r.decisions[r.decisions.length - 1].at, title: `Заявка № ${r.num}: ${REQUEST_LABEL[r.status].toLowerCase()}`, sub: `${money(r.amount)} · ${r.basis}`, to: '/tasks' });
+      n.push({ id: r.id, at: r.decisions[r.decisions.length - 1].at, title: `Заявка № ${r.num}: ${REQUEST_LABEL[r.status].toLowerCase()}`, sub: `${money(r.amount)} · ${r.basis}`, to: '/foreman' });
   }
   if (u.role === 'manager') {
     for (const need of d.needs.filter((x) => needState(x) === 'new'))
-      n.push({ id: need.id, at: need.date, title: `Новая потребность № ${need.num}`, sub: `${objectName(d, need.objectId)} · ${count(need.lines.length, 'позиция', 'позиции', 'позиций')}`, to: `/manager/needs/${need.id}` });
+      n.push({ id: need.id, at: need.date, title: `Новая заявка № ${need.num}`, sub: `${objectName(d, need.objectId)} · ${count(need.lines.length, 'позиция', 'позиции', 'позиций')}`, to: `/manager/needs/${need.id}` });
     for (const dl of d.deliveries.filter((x) => x.status === 'problem'))
-      n.push({ id: dl.id, at: dl.receivedAt ?? dl.eta, title: `Расхождение при получении, поставка № ${dl.num}`, sub: `${objectName(d, dl.objectId)}${dl.comment ? ' · ' + dl.comment : ''}`, to: '/manager/supply' });
+      n.push({ id: dl.id, at: dl.receivedAt ?? dl.eta, title: `Расхождение при получении, поставка № ${dl.num}`, sub: `${objectName(d, dl.objectId)}${dl.comment ? ' · ' + dl.comment : ''}`, to: `/manager/orders?delivery=${dl.id}` });
   }
   if (u.role === 'supplier') {
     for (const p of d.purchases.filter((x) => x.status !== 'received'))
       n.push({ id: p.id, at: p.history[p.history.length - 1]?.at ?? d.today, title: `Закупка № ${p.num}: ${PURCHASE_LABEL[p.status].toLowerCase()}`, sub: `${material(d, p.materialId).name} · ${objectName(d, p.objectId)}`, to: `/supplier/purchase/${p.id}` });
     for (const r of d.requests.filter((x) => x.authorId === u.id && x.decisions.length))
-      n.push({ id: r.id, at: r.decisions[r.decisions.length - 1].at, title: `Заявка № ${r.num}: ${REQUEST_LABEL[r.status].toLowerCase()}`, sub: `${money(r.amount)} · ${r.basis}`, to: '/supplier/money' });
+      n.push({ id: r.id, at: r.decisions[r.decisions.length - 1].at, title: `Заявка № ${r.num}: ${REQUEST_LABEL[r.status].toLowerCase()}`, sub: `${money(r.amount)} · ${r.basis}`, to: '/supplier?view=pay' });
   }
   return n.sort((a, b) => b.at.localeCompare(a.at));
 }
@@ -415,23 +415,23 @@ export function search(d: Data, u: User, q: string): Hit[] {
     hits.push({ id: o.id, kind: 'Объект', title: o.name, sub: o.address, to: u.role === 'admin' ? `/admin/objects/${o.id}` : u.role === 'foreman' ? `/foreman/object/${o.id}` : u.role === 'owner' ? '/owner/objects' : home });
   for (const m of d.materials) if (has(m.name, m.group)) {
     const st = stockView(d, m.id);
-    hits.push({ id: m.id, kind: 'Материал', title: m.name, sub: `${m.group} · на складе доступно ${qty(st.available, m.unit)}`, to: u.role === 'manager' ? '/manager/stock' : u.role === 'admin' ? '/admin/refs' : u.role === 'foreman' ? '/foreman/stock' : home });
+    hits.push({ id: m.id, kind: 'Материал', title: m.name, sub: `${m.group} · на складе доступно ${qty(st.available, m.unit)}`, to: u.role === 'manager' ? `/manager/stock?open=${m.id}` : u.role === 'admin' ? '/admin/refs' : u.role === 'foreman' ? '/foreman/materials?tab=stock' : home });
   }
   if (u.role !== 'owner') for (const n of d.needs) {
     if (u.role === 'foreman' && !u.objectIds?.includes(n.objectId)) continue;
-    if (has(`№ ${n.num}`, `потребность ${n.num}`, n.comment, ...n.lines.map((l) => material(d, l.materialId).name)))
-      hits.push({ id: n.id, kind: 'Потребность', title: `Потребность № ${n.num}`, sub: `${objectName(d, n.objectId)} · ${NEED_LABEL[needState(n)]}`, to: u.role === 'manager' ? `/manager/needs/${n.id}` : u.role === 'foreman' ? `/foreman/needs/${n.id}` : u.role === 'supplier' ? '/supplier/queue' : '/admin/requests?tab=tmc' });
+    if (has(`№ ${n.num}`, `потребность ${n.num}`, `заявка ${n.num}`, n.comment, ...n.lines.map((l) => material(d, l.materialId).name)))
+      hits.push({ id: n.id, kind: 'Заявка на материалы', title: `Заявка № ${n.num}`, sub: `${objectName(d, n.objectId)} · ${NEED_LABEL[needState(n)]}`, to: u.role === 'manager' ? `/manager/needs/${n.id}` : u.role === 'foreman' ? `/foreman/needs/${n.id}` : u.role === 'supplier' ? '/supplier' : `/admin/requests?tab=tmc&open=${n.id}` });
   }
   if (canMoney) for (const o of d.operations) if (has(o.counterparty, o.comment))
-    hits.push({ id: o.id, kind: 'Операция', title: `${o.kind === 'in' ? '+' : o.kind === 'out' ? '−' : ''}${money(o.amount)} · ${o.counterparty ?? 'Перевод'}`, sub: `${dShort(o.date)} · ${o.comment ?? ''}`, to: u.role === 'admin' ? '/admin/operations' : '/owner/finance' });
+    hits.push({ id: o.id, kind: 'Операция', title: `${o.kind === 'in' ? '+' : o.kind === 'out' ? '−' : ''}${money(o.amount)} · ${o.counterparty ?? 'Перевод'}`, sub: `${dShort(o.date)} · ${o.comment ?? ''}`, to: u.role === 'admin' ? '/admin/money?tab=ops' : '/owner/money' });
   if (canMoney || u.role === 'supplier') for (const r of d.requests) if (has(r.basis, `заявка ${r.num}`))
-    hits.push({ id: r.id, kind: 'Заявка на деньги', title: `№ ${r.num} · ${money(r.amount)}`, sub: `${r.basis} · ${REQUEST_LABEL[r.status]}`, to: u.role === 'owner' ? '/owner/approvals' : u.role === 'admin' ? '/admin/requests' : '/supplier/money' });
+    hits.push({ id: r.id, kind: 'Заявка на оплату', title: `№ ${r.num} · ${money(r.amount)}`, sub: `${r.basis} · ${REQUEST_LABEL[r.status]}`, to: u.role === 'owner' ? '/owner/approvals' : u.role === 'admin' ? '/admin/requests' : '/supplier?view=pay' });
   return hits.slice(0, 40);
 }
 
 /* ------------------------------------------- geometry: floors and versions */
 
-export const GEO_LABEL: Record<GeoStatus, string> = { draft: 'Черновик', review: 'На проверке', confirmed: 'Подтверждена', replaced: 'Заменена новой версией' };
+export const GEO_LABEL: Record<GeoStatus, string> = { draft: 'Черновик', review: 'На проверке', confirmed: 'Принято', replaced: 'Заменено' };
 export const GEO_TONE: Record<GeoStatus, Tone> = { draft: 'neutral', review: 'warning', confirmed: 'positive', replaced: 'neutral' };
 export const METHOD_LABEL: Record<MeasureMethod, string> = { manual: 'Ручной ввод', laser: 'Лазерный дальномер', phone: 'Измерение телефоном' };
 export const ELEMENT_LABEL: Record<SurfaceElement['kind'], string> = { niche: 'Ниша', ledge: 'Выступ или короб', slope: 'Откосы', other: 'Другая поверхность' };
@@ -498,14 +498,14 @@ export function documents(d: Data, u: User): Doc[] {
   if (role === 'foreman' || role === 'admin') {
     for (const a of d.acts.filter((x) => mine(x.objectId))) {
       const v = byId(d.geoVersions, a.versionId);
-      docs.push({ id: a.id, kind: 'Акт геометрии', title: `Акт геометрии № ${a.num}${a.floor ? ', ' + a.floor : ''}`, sub: `${objectName(d, a.objectId)} · ${a.by}`, date: a.date,
+      docs.push({ id: a.id, kind: 'Замеры', title: `Акт замеров № ${a.num}${a.floor ? ', ' + a.floor : ''}`, sub: `${objectName(d, a.objectId)} · ${a.by}`, date: a.date,
         status: v ? GEO_LABEL[v.status] : 'Сформирован', tone: v ? GEO_TONE[v.status] : 'neutral', objectId: a.objectId,
-        to: role === 'admin' ? `/admin/objects/${a.objectId}?tab=geometry` : `/foreman/geometry?floor=${encodeURIComponent(a.floor ?? '')}` });
+        to: role === 'admin' ? `/admin/objects/${a.objectId}?tab=geometry` : (a.floor ? `/foreman/geometry/${encodeURIComponent(a.floor)}` : '/foreman/geometry') });
     }
     for (const a of d.avrs.filter((x) => mine(x.objectId)))
-      docs.push({ id: a.id, kind: 'АВР', title: `Акт выполненных работ № ${a.num}`, sub: `${objectName(d, a.objectId)} · ${a.by}`, date: a.date,
+      docs.push({ id: a.id, kind: role === 'foreman' ? 'Акт' : 'АВР', title: `Акт выполненных работ № ${a.num}`, sub: `${objectName(d, a.objectId)} · ${a.by}`, date: a.date,
         status: a.status === 'accepted' ? 'Объёмы приняты' : a.status === 'review' ? 'На проверке' : 'Возвращён', tone: a.status === 'accepted' ? 'positive' : a.status === 'review' ? 'warning' : 'negative',
-        objectId: a.objectId, to: role === 'admin' ? `/admin/objects/${a.objectId}?tab=avr` : '/foreman/fact' });
+        objectId: a.objectId, to: role === 'admin' ? `/admin/objects/${a.objectId}?tab=avr` : '/foreman/works' });
     for (const i of d.issues.filter((x) => mine(x.objectId)))
       docs.push({ id: i.id, kind: 'Замечание', title: i.text, sub: `${objectName(d, i.objectId)} · ${i.place}`, date: i.date,
         status: i.status === 'done' ? 'Решено' : i.status === 'work' ? 'Решается' : 'Открыто', tone: i.status === 'done' ? 'positive' : i.status === 'work' ? 'warning' : 'negative',
@@ -513,19 +513,19 @@ export function documents(d: Data, u: User): Doc[] {
   }
   if (role !== 'owner') {
     for (const n of d.needs.filter((x) => mine(x.objectId)))
-      docs.push({ id: n.id, kind: 'Потребность', title: `Потребность в материалах № ${n.num}`, sub: `${objectName(d, n.objectId)} · ${userName(d, n.authorId)}`, date: n.date,
+      docs.push({ id: n.id, kind: 'Заявка на материалы', title: `Заявка на материалы № ${n.num}`, sub: `${objectName(d, n.objectId)} · ${userName(d, n.authorId)}`, date: n.date,
         status: NEED_LABEL[needState(n)], tone: NEED_TONE[needState(n)], objectId: n.objectId,
-        to: role === 'foreman' ? `/foreman/needs/${n.id}` : role === 'manager' ? `/manager/needs/${n.id}` : role === 'supplier' ? '/supplier/queue' : '/admin/requests?tab=tmc' });
+        to: role === 'foreman' ? `/foreman/needs/${n.id}` : role === 'manager' ? `/manager/needs/${n.id}` : role === 'supplier' ? '/supplier' : `/admin/requests?tab=tmc&open=${n.id}` });
     for (const dl of d.deliveries.filter((x) => mine(x.objectId)))
       docs.push({ id: dl.id, kind: 'Поставка', title: `Поставка № ${dl.num}: ${dl.source}`, sub: objectName(d, dl.objectId), date: dl.receivedAt ?? dl.eta,
         status: dl.status === 'expected' ? 'Ждёт получения' : dl.status === 'problem' ? 'С расхождением' : 'Получена', tone: dl.status === 'expected' ? 'hue' : dl.status === 'problem' ? 'negative' : 'positive',
-        objectId: dl.objectId, to: role === 'foreman' ? `/foreman/deliveries/${dl.id}` : role === 'manager' ? `/manager/supply?open=${dl.id}` : role === 'supplier' ? '/supplier/deliveries' : `/admin/objects/${dl.objectId}?tab=materials` });
+        objectId: dl.objectId, to: role === 'foreman' ? `/foreman/deliveries/${dl.id}` : role === 'manager' ? `/manager/orders?delivery=${dl.id}` : role === 'supplier' ? '/supplier/deliveries' : `/admin/objects/${dl.objectId}?tab=materials` });
   }
   if (role === 'owner' || role === 'admin' || role === 'supplier' || role === 'foreman') {
     for (const r of d.requests.filter((x) => role === 'owner' || role === 'admin' || x.authorId === u.id))
-      docs.push({ id: r.id, kind: 'Заявка на деньги', title: `Заявка № ${r.num} на ${money(r.amount)}`, sub: `${r.basis} · ${userName(d, r.authorId)}`, date: r.date,
+      docs.push({ id: r.id, kind: 'Заявка на оплату', title: `Заявка № ${r.num} на ${money(r.amount)}`, sub: `${r.basis} · ${userName(d, r.authorId)}`, date: r.date,
         status: REQUEST_LABEL[r.status], tone: REQUEST_TONE[r.status], objectId: r.objectId,
-        to: role === 'owner' ? '/owner/approvals' : role === 'admin' ? '/admin/requests' : role === 'supplier' ? '/supplier/money' : '/tasks' });
+        to: role === 'owner' ? '/owner/approvals' : role === 'admin' ? '/admin/requests' : role === 'supplier' ? '/supplier?view=pay' : '/foreman' });
   }
   return docs.sort((a, b) => b.date.localeCompare(a.date));
 }

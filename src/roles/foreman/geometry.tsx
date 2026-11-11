@@ -1,6 +1,7 @@
-// Foreman, geometry. Объект → этаж → помещение → зона → поверхность или элемент → замер.
-// A floor lives in versions: only a confirmed version is a basis for calculations, and the act of geometry
-// is formed for the whole floor, never for one room. The room is its own page because measuring is a long job.
+// Foreman, measurements («Замеры»). Объект → этаж → помещение.
+// A floor is sent for checking as a whole and is accepted as a whole. The data keeps versions of every floor;
+// the foreman never sees them as versions: he sees «Черновик», «На проверке», «Принято» or «Вернули» and a history.
+// The room is its own page because measuring is a long job.
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ChevronLeft, Plus, X } from 'lucide-react';
@@ -9,8 +10,11 @@ import {
   ELEMENT_LABEL, GEO_LABEL, GEO_TONE, METHOD_LABEL, WORK_LABEL, WORK_TONE, basisRoom, byId, confirmedGeo, currentGeo, elementArea, floorVersions, floorsOf,
   geoVersionLabel, roomFloor, roomSlopes, roomSurface, roomVolume, roomsOn, round1, totalsOf, workState,
 } from '../../data/select';
-import { Btn, Card, DataTable, Empty, Field, LinkBtn, List, Page, Photos, Pill, Row, Sheet, Stats, Two, toast, useDesktop, useWide, type Col, type Crumb } from '../../ui/kit';
-import { IssueButton, ShareButton, VoiceArea, canDictate } from '../../shared/extras';
+import {
+  Btn, Card, DataTable, Details, Empty, Field, LinkBtn, List, Page, Photos, Pill, Row, Sheet, Status, Two, toast, useDesktop, useWide,
+  type Col, type Crumb, type StatusKind,
+} from '../../ui/kit';
+import { IssueButton, ShareButton, VoiceArea } from '../../shared/extras';
 import { addDays, count, dFull, dShort, qty } from '../../lib/format';
 import type { BuildObject, Data, GeoTotals, GeoVersion, MeasureMethod, Norm, Opening, Room, SurfaceElement, Unevenness, Work, Zone } from '../../data/types';
 import { useObject } from './materials';
@@ -26,6 +30,9 @@ export const sq = (v: number): string => `${dec(v)} м²`;
 const signed = (v: number, unit: string): string => `${v > 0 ? '+' : v < 0 ? '−' : ''}${dec(Math.abs(round1(v)))} ${unit}`;
 const dash = <span className="muted">—</span>;
 const rooms3 = (n: number): string => count(n, 'помещение', 'помещения', 'помещений');
+const small = { fontSize: 13, lineHeight: '18px' } as const;
+const OBJECT: Crumb = { label: 'Объект', to: '/foreman/object' };
+const MEASURES: Crumb = { label: 'Замеры', to: '/foreman/geometry' };
 
 /** The largest unevenness measured in a room, in mm. Nothing measured is not a zero. */
 export function worstUneven(r: Pick<Room, 'uneven' | 'deviation'>): number | undefined {
@@ -45,8 +52,14 @@ export function deltaLine(now: GeoTotals, before: GeoTotals): string {
   if (now.rooms !== before.rooms) parts.push(`Δ помещений ${now.rooms > before.rooms ? '+' : '−'}${Math.abs(now.rooms - before.rooms)}`);
   return parts.join(' · ');
 }
+/** The same movement in the foreman's words: «пол +1,2 м², стены 0 м²». */
+function changeLine(now: GeoTotals, before: GeoTotals): string {
+  const parts = [`пол ${signed(now.floor - before.floor, 'м²')}`, `стены ${signed(now.walls - before.walls, 'м²')}`];
+  if (now.rooms !== before.rooms) parts.push(`помещений ${now.rooms > before.rooms ? '+' : '−'}${Math.abs(now.rooms - before.rooms)}`);
+  return parts.join(', ');
+}
 
-/** What the planned volume of a work rests on, and whether that version is still the confirmed one. */
+/** What the planned volume of a work rests on, and whether that version is still the confirmed one. Not shown to the foreman. */
 export function workBasis(d: Data, w: Work): { text: string; stale: boolean } | undefined {
   const v = byId(d.geoVersions, w.geoVersionId);
   if (!v && !w.roomId) return undefined;
@@ -57,27 +70,33 @@ export function GeoPill({ v }: { v?: GeoVersion }) {
   return v ? <Pill tone={GEO_TONE[v.status]}>{GEO_LABEL[v.status]}</Pill> : <Pill>Версии нет</Pill>;
 }
 
-function basisText(conf?: GeoVersion): string {
-  if (!conf) return 'Подтверждённой версии нет: расчёты по этому этажу недоступны.';
-  const when = conf.confirmedAt ? `, подтверждена ${dFull(conf.confirmedAt)}${conf.confirmedBy ? `, ${conf.confirmedBy}` : ''}` : '';
-  return `Основание для расчётов: версия ${conf.num}${when}.`;
+/** The state of a floor's measurements as the foreman sees it: «Черновик», «На проверке», «Принято» or «Вернули». */
+export function floorState(v?: GeoVersion): { kind: StatusKind; label: string; note?: string } {
+  if (!v) return { kind: 'off', label: 'Нет замеров' };
+  if (v.status === 'draft') return v.note ? { kind: 'problem', label: 'Вернули', note: v.note } : { kind: 'off', label: 'Черновик' };
+  if (v.status === 'review') return { kind: 'wait', label: 'На проверке' };
+  if (v.status === 'confirmed') return { kind: 'done', label: 'Принято' };
+  return { kind: 'off', label: GEO_LABEL[v.status] };
+}
+function FloorStatus({ v }: { v?: GeoVersion }) {
+  const s = floorState(v);
+  return <Status kind={s.kind}>{s.label}</Status>;
 }
 
-/** The main thing to know about the geometry of an object, in one sentence. */
+/** The main thing to know about the measurements of an object, in one sentence. */
 export function geoFinding(d: Data, objectId: string): string {
   const floors = floorsOf(d, objectId);
-  if (!floors.length) return 'По объекту ещё нет ни одного замера.';
+  if (!floors.length) return 'Замеров ещё нет.';
   const list = floors.map((floor) => ({ floor, v: currentGeo(d, objectId, floor), rooms: roomsOn(d, objectId, floor).length }));
   const returned = list.find((x) => x.v?.status === 'draft' && x.v.note);
-  if (returned?.v) return `${returned.floor}: версия ${returned.v.num} возвращена на доработку.`;
+  if (returned) return `${returned.floor}: замеры вернули на доработку.`;
   const draft = list.find((x) => x.v?.status === 'draft' && x.rooms > 0);
-  if (draft?.v) return `${draft.floor}: черновик версии ${draft.v.num} не передан на проверку.`;
+  if (draft) return `${draft.floor}: замеры не отправлены на проверку.`;
   const review = list.find((x) => x.v?.status === 'review');
-  if (review?.v) return `${review.floor}: версия ${review.v.num} на проверке${review.v.sentAt ? ` с ${dShort(review.v.sentAt)}` : ''}.`;
+  if (review) return `${review.floor}: замеры на проверке.`;
   const none = list.filter((x) => !confirmedGeo(d, objectId, x.floor));
-  if (none.length) return `${none.map((x) => x.floor).join(', ')}: подтверждённой версии нет.`;
-  const t = totalsOf(d.rooms.filter((r) => r.objectId === objectId));
-  return `Геометрия подтверждена по всем этажам: ${count(floors.length, 'этаж', 'этажа', 'этажей')}, ${sq(t.floor)} пола.`;
+  if (none.length) return `${none.map((x) => x.floor).join(', ')}: замеры ещё не приняты.`;
+  return 'Замеры приняты по всем этажам.';
 }
 
 const parseNum = (t: string): number => {
@@ -108,13 +127,18 @@ function Cell({ label, children }: { label: string; children: ReactNode }) {
 const Past = ({ list }: { list: { at: string; by: string; text: string }[] }) => (
   <>{list.map((h, i) => <p key={i} style={{ marginBottom: 4 }}><span className="muted">{dShort(h.at)}, {h.by}:</span> {h.text}</p>)}</>
 );
+/** A history line in the foreman's words: the data says «версия», he reads «Принято». */
+const plainText = (t: string): string => (t.startsWith('Подтверждено') ? 'Принято' : t);
 
 /* --------------------------------------------------------------- versions */
-/** Every version of a floor, the newest first: who made it, who confirmed it, why it was opened, what changed and how the totals moved. */
-export function VersionList({ objectId, floor }: { objectId: string; floor: string }) {
+/**
+ * Every version of a floor, the newest first: who made it, who accepted it, why it was opened, what changed and how the totals moved.
+ * `plain` is the foreman's view: the same history with dates instead of version numbers.
+ */
+export function VersionList({ objectId, floor, plain }: { objectId: string; floor: string; plain?: boolean }) {
   const d = useData();
   const versions = floorVersions(d, objectId, floor);
-  if (!versions.length) return <Empty>Версий геометрии по этажу ещё нет.</Empty>;
+  if (!versions.length) return <Empty>{plain ? 'Истории пока нет.' : 'Версий геометрии по этажу ещё нет.'}</Empty>;
   return (
     <div className="stack" style={{ gap: 16 }}>
       {versions.map((v, i) => {
@@ -124,22 +148,24 @@ export function VersionList({ objectId, floor }: { objectId: string; floor: stri
         return (
           <div key={v.id} style={i ? { borderTop: '1px solid var(--rule)', paddingTop: 14 } : undefined}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between' }}>
-              <b style={{ fontWeight: 600 }}>Версия {v.num}</b>
-              <GeoPill v={v} />
+              <b style={{ fontWeight: 600 }}>{plain ? `Замеры от ${dFull(v.createdAt)}` : `Версия ${v.num}`}</b>
+              {plain ? <FloorStatus v={v} /> : <GeoPill v={v} />}
             </div>
             <dl className="kv left" style={{ marginTop: 8 }}>
-              <dt>Создана</dt><dd>{dFull(v.createdAt)}, {v.by}</dd>
+              <dt>{plain ? 'Начаты' : 'Создана'}</dt><dd>{dFull(v.createdAt)}, {v.by}</dd>
               {v.sentAt && <><dt>На проверке</dt><dd>с {dFull(v.sentAt)}</dd></>}
-              {v.confirmedAt && <><dt>Подтверждена</dt><dd>{dFull(v.confirmedAt)}, {v.confirmedBy ?? dash}</dd></>}
+              {v.confirmedAt && <><dt>{plain ? 'Приняты' : 'Подтверждена'}</dt><dd>{dFull(v.confirmedAt)}, {v.confirmedBy ?? dash}</dd></>}
               {v.reason && <><dt>Причина</dt><dd>{v.reason}</dd></>}
               {v.note && <><dt>Замечание</dt><dd>{v.note}</dd></>}
               <dt>Итоги</dt><dd>{t ? `${rooms3(t.rooms)} · пол ${sq(t.floor)} · стены ${sq(t.walls)}` : dash}</dd>
-              {prev && <><dt>К версии {prev.num}</dt><dd>{t && before ? deltaLine(t, before) : dash}</dd></>}
+              {prev && (plain
+                ? <><dt>Изменение</dt><dd>{t && before ? changeLine(t, before) : dash}</dd></>
+                : <><dt>К версии {prev.num}</dt><dd>{t && before ? deltaLine(t, before) : dash}</dd></>)}
             </dl>
             {v.changes.length > 0 && (
               <div style={{ marginTop: 10 }}>
                 <div className="section-title" style={{ margin: '0 0 6px' }}>Изменения</div>
-                <Past list={v.changes} />
+                <Past list={plain ? v.changes.map((c) => ({ ...c, text: plainText(c.text) })) : v.changes} />
               </div>
             )}
           </div>
@@ -150,66 +176,53 @@ export function VersionList({ objectId, floor }: { objectId: string; floor: stri
 }
 
 /* ----------------------------------------------------------------- floors */
-/** The floors of an object as cards: the state of the current version, live totals and what calculations may rely on. */
+/** The floors of an object as cards: rooms and floor area, the state, one button to send a draft for checking. */
 export function FloorsBody({ objectId }: { objectId: string }) {
   const d = useData();
   const nav = useNavigate();
   const floors = floorsOf(d, objectId);
-  const [history, setHistory] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
   const sendable = (floor: string): boolean => currentGeo(d, objectId, floor)?.status === 'draft' && roomsOn(d, objectId, floor).length > 0;
-  const firstToSend = floors.find(sendable);
   const clean = name.trim().replace(/[\\/]+/g, '-');
   const taken = floors.some((f) => f.toLowerCase() === clean.toLowerCase());
   const closeAdd = () => { setAdding(false); setName(''); };
   return (
     <>
-      {floors.length === 0 && <Card><Empty>По объекту ещё нет ни одного замера.</Empty></Card>}
+      {floors.length === 0 && <Card><Empty>Замеров ещё нет.</Empty></Card>}
       {floors.length > 0 && (
         <div className="grid cols-2">
           {floors.map((floor) => {
             const cur = currentGeo(d, objectId, floor);
-            const conf = confirmedGeo(d, objectId, floor);
+            const s = floorState(cur);
             const t = totalsOf(roomsOn(d, objectId, floor));
             return (
-              <Card key={floor} title={floor} note={cur ? `версия ${cur.num}` : undefined} action={<GeoPill v={cur} />}>
-                <div className="stack">
-                  <dl className="kv">
-                    <dt>Помещений</dt><dd>{t.rooms}</dd>
-                    <dt>Пол</dt><dd>{sq(t.floor)}</dd>
-                    <dt>Стены</dt><dd>{sq(t.walls)}</dd>
-                  </dl>
-                  <p className={conf ? 'muted' : undefined}>{basisText(conf)}</p>
-                  {cur?.status === 'draft' && cur.note && <div className="notice">Возвращено на доработку: {cur.note}</div>}
-                  {cur && cur.status !== 'confirmed' && cur.reason && <p><span className="muted">Причина изменения:</span> {cur.reason}</p>}
-                  <div className="btn-row">
-                    <LinkBtn to={floorPath(floor)}>Открыть этаж</LinkBtn>
-                    {cur && sendable(floor) && (
-                      <Btn kind={floor === firstToSend ? 'primary' : 'secondary'}
-                        onClick={() => { act.sendFloor(objectId, floor); toast(`${floor}: версия ${cur.num} передана на проверку`); }}>Передать на проверку</Btn>
-                    )}
-                    <Btn onClick={() => setHistory(floor)}>Версии</Btn>
+              <Card key={floor} flush>
+                <List>
+                  <Row to={floorPath(floor)} wrap title={floor}
+                    sub={<>{rooms3(t.rooms)}, {sq(t.floor)} пола{s.note && <span className="neg"><br />Вернули: {s.note}</span>}</>}
+                    side={<FloorStatus v={cur} />} />
+                </List>
+                {sendable(floor) && (
+                  <div className="card-body" style={{ paddingTop: 0 }}>
+                    <Btn kind="primary" block onClick={() => { act.sendFloor(objectId, floor); toast(`${floor}: замеры отправлены на проверку`); }}>Отправить на проверку</Btn>
                   </div>
-                </div>
+                )}
+                <Details label="История"><VersionList objectId={objectId} floor={floor} plain /></Details>
               </Card>
             );
           })}
         </div>
       )}
-      <div className="btn-row">
-        <Btn kind={floors.length ? 'secondary' : 'primary'} onClick={() => setAdding(true)}><Plus size={18} /> Добавить этаж</Btn>
+      <div>
+        <Btn kind={floors.length ? 'secondary' : 'primary'} small={floors.length > 0} onClick={() => setAdding(true)}><Plus size={floors.length ? 16 : 18} /> Добавить этаж</Btn>
       </div>
-
-      <Sheet open={!!history} wide title={history ? `Версии: ${history}` : ''} onClose={() => setHistory(null)}>
-        {history && <VersionList objectId={objectId} floor={history} />}
-      </Sheet>
 
       <Sheet open={adding} title="Новый этаж" onClose={closeAdd} dirty={!!clean}
         foot={<><Btn onClick={closeAdd}>Отмена</Btn><Btn kind="primary" disabled={!clean || taken}
-          onClick={() => { closeAdd(); nav(`${floorPath(clean)}/new`); }}>Перейти к первому помещению</Btn></>}>
+          onClick={() => { closeAdd(); nav(`${floorPath(clean)}/new`); }}>Добавить первое помещение</Btn></>}>
         <div className="form">
-          <Field label="Название этажа" help={taken ? 'Такой этаж уже есть в объекте.' : 'Этаж появится в списке после сохранения первого помещения.'}>
+          <Field label="Название этажа" help={taken ? 'Такой этаж уже есть.' : undefined}>
             <input className="input" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Например, 3 этаж или подвал" />
           </Field>
         </div>
@@ -218,6 +231,7 @@ export function FloorsBody({ objectId }: { objectId: string }) {
   );
 }
 
+/** «Замеры»: the floors of the current object. */
 export function Geometry() {
   const d = useData();
   const o = useObject();
@@ -225,28 +239,16 @@ export function Geometry() {
   // a document «Акт геометрии» links here with the floor in the query
   const asked = sp.get('floor');
   if (asked && floorsOf(d, o.id).includes(asked)) return <Navigate to={floorPath(asked)} replace />;
-  // an object without measurements says so once, in the body, next to the button that starts the first one
-  const empty = floorsOf(d, o.id).length === 0;
-  return <Page title="Геометрия" sub={empty ? undefined : geoFinding(d, o.id)}><FloorsBody objectId={o.id} /></Page>;
+  return <Page title="Замеры" path={[OBJECT, { label: 'Замеры' }]}><FloorsBody objectId={o.id} /></Page>;
 }
 
 /* -------------------------------------------------------------- one floor */
-function floorFinding(cur: GeoVersion | undefined, conf: GeoVersion | undefined, t: GeoTotals): string {
-  if (!t.rooms) return 'На этаже ещё нет помещений.';
-  if (!cur) return 'По этажу ещё нет версии геометрии.';
-  const basis = conf && conf.id !== cur.id ? `расчёты идут по версии ${conf.num}` : 'расчёты по этажу пока недоступны';
-  if (cur.status === 'draft') return cur.note ? `Версия ${cur.num} возвращена на доработку, ${basis}.` : `Черновик версии ${cur.num} не передан на проверку, ${basis}.`;
-  if (cur.status === 'review') return `Версия ${cur.num} на проверке${cur.sentAt ? ` с ${dShort(cur.sentAt)}` : ''}, ${basis}.`;
-  return `Версия ${cur.num} подтверждена${cur.confirmedAt ? ` ${dFull(cur.confirmedAt)}` : ''} и служит основанием для расчётов.`;
-}
-
 export function FloorPage() {
   const d = useData();
   const o = useObject();
   const nav = useNavigate();
   const wide = useWide();
   const { floor = '' } = useParams();
-  const [history, setHistory] = useState(false);
   const exists = floorsOf(d, o.id).includes(floor);
   // the place is kept in the session, so the next form opens with the floor filled in
   useEffect(() => {
@@ -255,14 +257,13 @@ export function FloorPage() {
     if (s.floor !== floor || s.roomId !== undefined) act.setPlace(floor);
   }, [floor, exists, o.id]);
 
-  const path: Crumb[] = [{ label: 'Объекты', to: '/foreman/objects' }, { label: o.name, to: `/foreman/object/${o.id}` }, { label: floor }, { label: 'Геометрия' }];
+  const path: Crumb[] = [OBJECT, MEASURES, { label: floor }];
   if (!exists) {
     return (
-      <Page title={floor} sub={`На объекте «${o.name}» такого этажа пока нет.`} path={path}>
-        <Card><Empty>Этаж появится здесь после первого сохранённого помещения.</Empty></Card>
+      <Page title={floor} path={path}>
+        <Card><Empty>На этаже ещё нет помещений.</Empty></Card>
         <div className="btn-row">
           <LinkBtn kind="primary" to={`${floorPath(floor)}/new`}><Plus size={18} /> Добавить помещение</LinkBtn>
-          <LinkBtn to="/foreman/geometry">Все этажи</LinkBtn>
         </div>
       </Page>
     );
@@ -272,60 +273,51 @@ export function FloorPage() {
   const t = totalsOf(rooms);
   const slopes = round1(rooms.reduce((s, r) => s + roomSlopes(r), 0));
   const cur = currentGeo(d, o.id, floor);
-  const conf = confirmedGeo(d, o.id, floor);
+  const state = floorState(cur);
   const sendable = cur?.status === 'draft' && rooms.length > 0;
   const dims = (r: Room): string => `${dec(r.length)} × ${dec(r.width)} × ${dec(r.height)}`;
-  const uneven = (r: Room): ReactNode => {
-    const mm = worstUneven(r);
-    if (mm === undefined) return dash;
-    return mm >= 10 ? <Pill tone="warning">{mm} мм</Pill> : `${mm} мм`;
-  };
+  // from 10 mm noticeably more material goes into levelling: the room is marked in the list
+  const bumpy = (r: Room): ReactNode => { const mm = worstUneven(r); return mm !== undefined && mm >= 10 ? <> <Pill tone="warning">неровность {mm} мм</Pill></> : null; };
   const cols: Col<Room>[] = wide ? [
-    { head: 'Помещение', cell: (r) => <Two a={r.name} b={r.purpose} /> },
+    { head: 'Помещение', cell: (r) => <Two a={<>{r.name}{bumpy(r)}</>} b={r.purpose} /> },
     { head: 'Д × Ш × В, м', cell: dims },
     { head: 'Пол, м²', num: true, cell: (r) => dec(roomFloor(r)) },
     { head: 'Стены, м²', num: true, cell: (r) => dec(roomSurface(r, 'walls')) },
-    { head: 'Откосы, м²', num: true, cell: (r) => dec(roomSlopes(r)) },
-    { head: 'Неровность', num: true, cell: uneven },
   ] : [
-    { head: 'Помещение', phone: 'title', cell: (r) => { const mm = worstUneven(r); return <>{r.name}{mm !== undefined && mm >= 10 ? <> <Pill tone="warning">неровность {mm} мм</Pill></> : null}</>; } },
-    { head: 'Назначение', phone: 'sub', cell: (r) => r.purpose || 'назначение не указано' },
+    { head: 'Помещение', phone: 'title', cell: (r) => <>{r.name}{bumpy(r)}</> },
     { head: 'Размеры', phone: 'sub', cell: (r) => `${dims(r)} м` },
     { head: 'Стены', phone: 'sub', cell: (r) => `стены ${sq(roomSurface(r, 'walls'))}` },
     { head: 'Пол', phone: 'value', cell: (r) => sq(roomFloor(r)) },
     { head: 'Что', phone: 'meta', cell: () => 'пол' },
   ];
   return (
-    <Page title={floor} sub={floorFinding(cur, conf, t)} path={path}
-      actions={<LinkBtn kind={sendable ? 'secondary' : 'primary'} to={`${floorPath(floor)}/new`}><Plus size={18} /> Добавить помещение</LinkBtn>}>
-      <Stats items={[
-        { label: 'Пол', value: sq(t.floor), zero: !t.rooms },
-        { label: 'Стены', value: sq(t.walls), zero: !t.rooms },
-        { label: 'Помещений', value: t.rooms, zero: !t.rooms },
-        { label: 'Периметр', value: `${dec(t.perimeter)} м`, zero: !t.rooms },
-      ]} />
-      <Card title={cur ? `Версия ${cur.num}` : 'Версия геометрии'} action={<GeoPill v={cur} />}>
-        <div className="stack">
-          <p className={conf ? 'muted' : undefined}>{basisText(conf)}</p>
-          {cur?.status === 'draft' && cur.note && <div className="notice">Возвращено на доработку: {cur.note}</div>}
-          {cur && cur.status !== 'confirmed' && cur.reason && <p><span className="muted">Причина изменения:</span> {cur.reason}</p>}
-          <p className="muted" style={{ fontSize: 13 }}>Акт геометрии формируется на весь этаж: на проверку уходят все его помещения сразу.</p>
-          <div className="btn-row">
-            {cur && sendable && (
-              <Btn kind="primary" onClick={() => { act.sendFloor(o.id, floor); toast(`${floor}: версия ${cur.num} передана на проверку`); }}>Передать на проверку</Btn>
-            )}
-            <Btn onClick={() => setHistory(true)}>Версии</Btn>
-            <LinkBtn to="/foreman/geometry">Все этажи</LinkBtn>
+    <Page title={floor} path={path}>
+      <Card>
+        <div className="stack" style={{ gap: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <span>{rooms3(t.rooms)} · пол {sq(t.floor)} · стены {sq(t.walls)}</span>
+            <FloorStatus v={cur} />
           </div>
+          {state.note && <p className="neg">Вернули: {state.note}</p>}
+          {sendable && (
+            <Btn kind="primary" block onClick={() => { act.sendFloor(o.id, floor); toast(`${floor}: замеры отправлены на проверку`); }}>Отправить на проверку</Btn>
+          )}
         </div>
       </Card>
-      <Card title="Помещения" note={rooms.length ? rooms3(rooms.length) : undefined} flush>
+      <Card title="Помещения" flush>
         <DataTable cols={cols} rows={rooms} keyOf={(r) => r.id} onRow={(r) => nav(roomPath(floor, r.id))} empty="На этаже ещё нет помещений."
-          foot={['Итого', '', dec(t.floor), dec(t.walls), dec(slopes), '']} />
+          foot={['Итого', '', dec(t.floor), dec(t.walls)]} />
       </Card>
-      <Sheet open={history} wide title={`Версии: ${floor}`} onClose={() => setHistory(false)}>
-        <VersionList objectId={o.id} floor={floor} />
-      </Sheet>
+      <div className="btn-row">
+        <LinkBtn kind={sendable ? 'secondary' : 'primary'} to={`${floorPath(floor)}/new`}><Plus size={18} /> Добавить помещение</LinkBtn>
+      </div>
+      <Details label="История">
+        <dl className="kv">
+          <dt>Откосы</dt><dd>{sq(slopes)}</dd>
+          <dt>Периметр</dt><dd>{dec(t.perimeter)} м</dd>
+        </dl>
+        <VersionList objectId={o.id} floor={floor} plain />
+      </Details>
     </Page>
   );
 }
@@ -365,11 +357,6 @@ function toInput(f: RoomDraft, objectId: string, floor: string, id?: string): Ro
   };
 }
 
-const METHOD_HELP: Record<MeasureMethod, string> = {
-  manual: 'Размеры вносятся вручную, с рулетки или с чертежа.',
-  laser: 'Показания дальномера вносятся вручную.',
-  phone: 'Показание телефона считается черновиком: проверьте его контрольными замерами рулеткой или дальномером и поправьте значения.',
-};
 const BASE_LABEL: Record<NonNullable<Norm['base']>, string> = { walls: 'Стены', floor: 'Пол', ceiling: 'Потолок' };
 
 export function RoomPage() {
@@ -381,8 +368,7 @@ export function RoomPage() {
   const mine = !!room && !!u.objectIds?.includes(room.objectId);
   if (roomId && !mine) {
     return (
-      <Page title="Помещение не найдено" sub="Возможно, ссылка устарела или демо-данные были сброшены."
-        path={[{ label: 'Объекты', to: '/foreman/objects' }, { label: 'Геометрия', to: '/foreman/geometry' }, { label: 'Помещение' }]}>
+      <Page title="Помещение не найдено" path={[OBJECT, MEASURES, { label: 'Помещение' }]}>
         <Card><Empty>Такого помещения нет на ваших объектах.</Empty></Card>
       </Page>
     );
@@ -454,20 +440,13 @@ function RoomForm({ o, floor, room }: { o: BuildObject; floor: string; room?: Ro
   const save = (why?: string) => {
     act.saveRoom(input, why);
     const after = currentGeo(useStore.getState(), o.id, floor);
-    if (after && after.id !== cur?.id) toast(after.num > 1 ? `Замер сохранён. Открыта версия ${after.num} этажа, подтверждённая осталась в истории` : `Помещение добавлено. Открыта версия ${after.num} этажа`);
-    else if (cur?.status === 'review' && after?.status === 'draft') toast(`Замер сохранён. Версия ${after.num} отозвана с проверки`);
+    if (after && cur && after.id !== cur.id) toast('Замер сохранён. Этаж снова в черновике');
+    else if (cur?.status === 'review' && after?.status === 'draft') toast('Замер сохранён. Этаж снят с проверки');
     else toast(room ? 'Замер сохранён' : 'Помещение добавлено');
     nav(floorPath(floor), { replace: true });
   };
 
-  const path: Crumb[] = [
-    { label: 'Объекты', to: '/foreman/objects' }, { label: o.name, to: `/foreman/object/${o.id}` },
-    { label: floor, to: back }, { label: room ? room.name : 'Новое помещение' },
-  ];
-  const savedWorst = room ? worstUneven(room) : undefined;
-  const sub = room
-    ? `Пол ${sq(roomFloor(room))}, стены ${sq(roomSurface(room, 'walls'))}${savedWorst !== undefined && savedWorst >= 10 ? `, неровность до ${savedWorst} мм` : ''}.`
-    : floorExists ? `Новое помещение на этаже «${floor}».` : `Первое помещение нового этажа «${floor}».`;
+  const path: Crumb[] = [OBJECT, MEASURES, { label: floor, to: back }, { label: room ? room.name : 'Новое помещение' }];
   const label = room ? `${room.name}, ${floor}` : '';
   const removeBtn = (what: string, onClick: () => void) => (
     <button type="button" className="icon-btn" aria-label={what} onClick={onClick}><X size={18} color="var(--muted)" /></button>
@@ -475,47 +454,24 @@ function RoomForm({ o, floor, room }: { o: BuildObject; floor: string; room?: Ro
 
   return (
     <div onClickCapture={guard}>
-      <Page title={room ? room.name : 'Новое помещение'} sub={sub} path={path}
-        actions={room ? (
-          <>
-            <IssueButton ctx={{ objectId: o.id, place: label, source: { kind: 'room', id: room.id, label } }} />
-            <ShareButton path={roomPath(floor, room.id)} title={label} />
-          </>
-        ) : undefined}>
-        {needsReason && cur && (
-          <div className="notice plain">
-            Версия {cur.num} этажа подтверждена. Сохранение изменений откроет версию {cur.num + 1} и попросит указать причину, подтверждённая версия останется в истории.
-          </div>
-        )}
-        {cur?.status === 'review' && <div className="notice">Версия {cur.num} этажа на проверке. Сохранение изменений отзовёт её с проверки: после правок этаж передаётся заново.</div>}
-        {cur?.status === 'draft' && cur.note && <div className="notice">Версия {cur.num} возвращена на доработку: {cur.note}</div>}
+      <Page title={room ? room.name : 'Новое помещение'} path={path}>
+        {needsReason && <div className="notice">Замеры уже приняты: изменение отправится на проверку заново.</div>}
+        {cur?.status === 'review' && <div className="notice">Замеры этажа на проверке: изменение снимет их с проверки.</div>}
+        {cur?.status === 'draft' && cur.note && <div className="notice">Вернули: {cur.note}</div>}
 
-        <Card title="Помещение">
+        <Card>
           <div className="form">
             <Field label="Название"><input className="input" value={f.name} onChange={(e) => set({ name: e.target.value })} placeholder="Например, кухня" /></Field>
-            <Field label="Назначение">
-              <input className="input" list="room-purposes" value={f.purpose} onChange={(e) => set({ purpose: e.target.value })} placeholder="Жилая, кухня, мокрая зона" />
-              <datalist id="room-purposes">{purposes.map((p) => <option key={p} value={p} />)}</datalist>
-            </Field>
-            <Field label="Способ измерения" help={METHOD_HELP[f.method]}>
-              <select className="select" value={f.method} onChange={(e) => set({ method: e.target.value as MeasureMethod })}>
-                {(Object.keys(METHOD_LABEL) as MeasureMethod[]).map((k) => <option key={k} value={k}>{METHOD_LABEL[k]}</option>)}
-              </select>
-            </Field>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
+              <Field label="Длина, м"><NumInput label="Длина, м" value={f.length} onChange={(v) => set({ length: v })} /></Field>
+              <Field label="Ширина, м"><NumInput label="Ширина, м" value={f.width} onChange={(v) => set({ width: v })} /></Field>
+              <Field label="Высота, м"><NumInput label="Высота, м" value={f.height} onChange={(v) => set({ height: v })} /></Field>
+            </div>
           </div>
         </Card>
 
-        <Card title="Размеры" note="в метрах">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
-            <Field label="Длина"><NumInput label="Длина, м" value={f.length} onChange={(v) => set({ length: v })} /></Field>
-            <Field label="Ширина"><NumInput label="Ширина, м" value={f.width} onChange={(v) => set({ width: v })} /></Field>
-            <Field label="Высота"><NumInput label="Высота, м" value={f.height} onChange={(v) => set({ height: v })} /></Field>
-          </div>
-        </Card>
-
-        <Card title="Проёмы" note="двери и окна вычитаются из стен">
+        <Card title="Двери и окна">
           <div className="stack" style={{ gap: 8 }}>
-            {f.openings.length === 0 && <p className="muted">Проёмов пока нет.</p>}
             {f.openings.length > 0 && (
               <div className="muted" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) 44px', gap: 8, fontSize: 12, lineHeight: '16px' }}>
                 <span>Проём</span><span>Ширина, м</span><span>Высота, м</span><span />
@@ -538,113 +494,129 @@ function RoomForm({ o, floor, room }: { o: BuildObject; floor: string; room?: Ro
           </div>
         </Card>
 
-        <Card title="Ниши, выступы и откосы">
-          <div className="stack">
-            <p className="muted" style={{ fontSize: 13 }}>Откосы считаются отдельной поверхностью и в площадь стен не входят. Ниши и выступы добавляются к стенам.</p>
-            {f.elements.map((x, i) => (
-              <div key={x.id} className="stack" style={{ gap: 8, paddingTop: 12, borderTop: '1px solid var(--rule)' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto 44px', gap: 8, alignItems: 'center' }}>
-                  <select className="select" aria-label="Вид элемента" value={x.kind} onChange={(e) => setElement(i, { kind: e.target.value as SurfaceElement['kind'] })}>
-                    {(Object.keys(ELEMENT_LABEL) as SurfaceElement['kind'][]).map((k) => <option key={k} value={k}>{ELEMENT_LABEL[k]}</option>)}
-                  </select>
-                  <span className="num nowrap" style={{ fontWeight: 500 }}>{sq(elementArea(x))}</span>
-                  {removeBtn('Убрать элемент', () => set({ elements: f.elements.filter((_, j) => j !== i) }))}
-                </div>
-                <input className="input" aria-label="Название элемента" value={x.name} onChange={(e) => setElement(i, { name: e.target.value })}
-                  placeholder={x.kind === 'slope' ? 'Например, откосы окон' : x.kind === 'niche' ? 'Например, ниша под телевизор' : 'Например, короб стояка'} />
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
-                  <Cell label="Длина, м"><NumInput label="Длина элемента, м" value={x.length} onChange={(v) => setElement(i, { length: v })} /></Cell>
-                  <Cell label="Высота, м"><NumInput label="Высота или глубина элемента, м" value={x.height} onChange={(v) => setElement(i, { height: v })} /></Cell>
-                  <Cell label="Количество"><NumInput label="Количество одинаковых элементов" value={x.count} onChange={(v) => setElement(i, { count: Math.round(v) })} /></Cell>
-                </div>
-              </div>
-            ))}
-            <div><Btn small onClick={() => set({ elements: [...f.elements, { id: rowId('e'), kind: 'slope', name: '', length: 0, height: 0, count: 1 }] })}><Plus size={16} /> Добавить элемент</Btn></div>
+        <Card>
+          <div style={{ display: 'flex', gap: '4px 20px', flexWrap: 'wrap' }}>
+            <span><span className="muted">Пол</span> <b className="num" style={{ fontWeight: 600 }}>{sq(roomFloor(calc))}</b></span>
+            <span><span className="muted">Стены</span> <b className="num" style={{ fontWeight: 600 }}>{sq(Math.max(0, roomSurface(calc, 'walls')))}</b></span>
           </div>
         </Card>
 
-        <Card title="Результат" note="считается по введённым размерам">
+        <Details>
+          <div className="form">
+            <Field label="Назначение">
+              <input className="input" list="room-purposes" value={f.purpose} onChange={(e) => set({ purpose: e.target.value })} placeholder="Жилая, кухня, мокрая зона" />
+              <datalist id="room-purposes">{purposes.map((p) => <option key={p} value={p} />)}</datalist>
+            </Field>
+            <Field label="Чем мерили" help={f.method === 'phone' ? 'Проверьте рулеткой: телефон меряет неточно.' : undefined}>
+              <select className="select" value={f.method} onChange={(e) => set({ method: e.target.value as MeasureMethod })}>
+                {(Object.keys(METHOD_LABEL) as MeasureMethod[]).map((k) => <option key={k} value={k}>{METHOD_LABEL[k]}</option>)}
+              </select>
+            </Field>
+          </div>
+
+          <Card title="Ниши, выступы и откосы">
+            <div className="stack">
+              {f.elements.map((x, i) => (
+                <div key={x.id} className="stack" style={{ gap: 8, paddingTop: i ? 12 : 0, borderTop: i ? '1px solid var(--rule)' : undefined }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto 44px', gap: 8, alignItems: 'center' }}>
+                    <select className="select" aria-label="Вид элемента" value={x.kind} onChange={(e) => setElement(i, { kind: e.target.value as SurfaceElement['kind'] })}>
+                      {(Object.keys(ELEMENT_LABEL) as SurfaceElement['kind'][]).map((k) => <option key={k} value={k}>{ELEMENT_LABEL[k]}</option>)}
+                    </select>
+                    <span className="num nowrap" style={{ fontWeight: 500 }}>{sq(elementArea(x))}</span>
+                    {removeBtn('Убрать элемент', () => set({ elements: f.elements.filter((_, j) => j !== i) }))}
+                  </div>
+                  <input className="input" aria-label="Название элемента" value={x.name} onChange={(e) => setElement(i, { name: e.target.value })}
+                    placeholder={x.kind === 'slope' ? 'Например, откосы окон' : x.kind === 'niche' ? 'Например, ниша под телевизор' : 'Например, короб стояка'} />
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
+                    <Cell label="Длина, м"><NumInput label="Длина элемента, м" value={x.length} onChange={(v) => setElement(i, { length: v })} /></Cell>
+                    <Cell label="Высота, м"><NumInput label="Высота или глубина элемента, м" value={x.height} onChange={(v) => setElement(i, { height: v })} /></Cell>
+                    <Cell label="Сколько"><NumInput label="Количество одинаковых элементов" value={x.count} onChange={(v) => setElement(i, { count: Math.round(v) })} /></Cell>
+                  </div>
+                </div>
+              ))}
+              <div><Btn small onClick={() => set({ elements: [...f.elements, { id: rowId('e'), kind: 'slope', name: '', length: 0, height: 0, count: 1 }] })}><Plus size={16} /> Добавить</Btn></div>
+            </div>
+          </Card>
+
           <dl className="kv">
-            <dt>Пол</dt><dd>{sq(roomFloor(calc))}</dd>
-            <dt>Стены без проёмов, с нишами и выступами</dt><dd>{sq(Math.max(0, roomSurface(calc, 'walls')))}</dd>
             <dt>Откосы</dt><dd>{sq(roomSlopes(calc))}</dd>
             <dt>Периметр</dt><dd>{dec(round1(2 * (calc.length + calc.width)))} м</dd>
             <dt>Объём</dt><dd>{dec(roomVolume(calc))} м³</dd>
           </dl>
-        </Card>
 
-        <Card title="Зоны" note={f.zones.length ? `${sq(zonesArea)} из ${sq(roomFloor(calc))} пола` : undefined}>
-          <div className="stack">
-            {f.zones.length === 0 && <p className="muted">Зоны нужны, когда части помещения отделываются по-разному: например, душевая в санузле.</p>}
-            {zonesArea > roomFloor(calc) && <p className="neg">Зоны больше площади пола на {sq(round1(zonesArea - roomFloor(calc)))}.</p>}
-            {f.zones.map((x, i) => (
-              <div key={x.id} className="stack" style={{ gap: 8, paddingTop: i ? 12 : 0, borderTop: i ? '1px solid var(--rule)' : undefined }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 44px', gap: 8, alignItems: 'center' }}>
-                  <input className="input" aria-label="Название зоны" value={x.name} onChange={(e) => setZone(i, { name: e.target.value })} placeholder="Название зоны" />
-                  {removeBtn('Убрать зону', () => set({ zones: f.zones.filter((_, j) => j !== i) }))}
+          <Card title="Зоны" note={f.zones.length ? `${sq(zonesArea)} из ${sq(roomFloor(calc))} пола` : undefined}>
+            <div className="stack">
+              {zonesArea > roomFloor(calc) && <p className="neg">Зоны больше пола на {sq(round1(zonesArea - roomFloor(calc)))}.</p>}
+              {f.zones.map((x, i) => (
+                <div key={x.id} className="stack" style={{ gap: 8, paddingTop: i ? 12 : 0, borderTop: i ? '1px solid var(--rule)' : undefined }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 44px', gap: 8, alignItems: 'center' }}>
+                    <input className="input" aria-label="Название зоны" value={x.name} onChange={(e) => setZone(i, { name: e.target.value })} placeholder="Например, душевая" />
+                    {removeBtn('Убрать зону', () => set({ zones: f.zones.filter((_, j) => j !== i) }))}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.6fr) minmax(0, 1fr)', gap: 8 }}>
+                    <Cell label="Назначение"><input className="input" aria-label="Назначение зоны" value={x.purpose ?? ''} onChange={(e) => setZone(i, { purpose: e.target.value })} /></Cell>
+                    <Cell label="Площадь, м²"><NumInput label="Площадь зоны, м²" value={x.area} onChange={(v) => setZone(i, { area: v })} /></Cell>
+                  </div>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.6fr) minmax(0, 1fr)', gap: 8 }}>
-                  <Cell label="Назначение"><input className="input" aria-label="Назначение зоны" value={x.purpose ?? ''} onChange={(e) => setZone(i, { purpose: e.target.value })} /></Cell>
-                  <Cell label="Площадь, м²"><NumInput label="Площадь зоны, м²" value={x.area} onChange={(v) => setZone(i, { area: v })} /></Cell>
-                </div>
-              </div>
-            ))}
-            <div><Btn small onClick={() => set({ zones: [...f.zones, { id: rowId('z'), name: '', purpose: '', area: 0 }] })}><Plus size={16} /> Добавить зону</Btn></div>
-          </div>
-        </Card>
-
-        <Card title="Неровности" action={worst !== undefined && worst >= 10 ? <Pill tone="warning">до {worst} мм</Pill> : undefined}>
-          <div className="stack" style={{ gap: 8 }}>
-            <p className="muted" style={{ fontSize: 13 }}>От 10 мм материала уйдёт заметно больше расчётного.</p>
-            {f.uneven.map((x, i) => (
-              <div key={x.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 92px 44px', gap: 8, alignItems: 'center' }}>
-                <input className="input" aria-label="Место неровности" value={x.place} onChange={(e) => setUneven(i, { place: e.target.value })} placeholder="Где: стена у окна, пол у входа" />
-                <NumInput label="Неровность, мм" placeholder="мм" value={x.mm} onChange={(v) => setUneven(i, { mm: v })} />
-                {removeBtn('Убрать неровность', () => set({ uneven: f.uneven.filter((_, j) => j !== i) }))}
-              </div>
-            ))}
-            <div><Btn small onClick={() => set({ uneven: [...f.uneven, { id: rowId('u'), place: '', mm: 0 }] })}><Plus size={16} /> Добавить неровность</Btn></div>
-          </div>
-        </Card>
-
-        <Card title="Особенности и фото">
-          <div className="form">
-            <Field label="Особенности" help={canDictate() ? 'Можно надиктовать: нажмите на микрофон и проверьте текст перед сохранением.' : undefined}>
-              <VoiceArea label="Особенности помещения" value={f.note} onChange={(note) => set({ note })} placeholder="Что мешало измерить, что важно знать бригаде" />
-            </Field>
-            <Photos count={f.photos} onChange={(photos) => set({ photos })} />
-          </div>
-        </Card>
-
-        {room && (
-          <Card title="Работы в помещении" note={works.length ? String(works.length) : undefined} flush>
-            {works.length ? (
-              <List>
-                {works.map((w) => {
-                  const st = workState(w, d.today);
-                  const basis = workBasis(d, w);
-                  return (
-                    <Row key={w.id} wrap title={w.name}
-                      sub={<>{w.crew ?? 'исполнитель не назначен'} · {basis?.text}{basis?.stale ? ' · геометрия этажа с тех пор уточнялась' : ''} · срок {dShort(w.deadline)}</>}
-                      value={qty(w.plan, w.unit)} meta={<Pill tone={WORK_TONE[st]}>{WORK_LABEL[st]}</Pill>} />
-                  );
-                })}
-              </List>
-            ) : <Empty>На это помещение работ ещё не запланировано.</Empty>}
-            <div className="card-body stack" style={{ gap: 8, borderTop: works.length ? '1px solid var(--rule)' : undefined, paddingTop: works.length ? undefined : 0 }}>
-              <div><Btn disabled={!conf || dirty} onClick={() => setPlan(true)}><Plus size={18} /> Запланировать работу</Btn></div>
-              {!conf && <p className="muted" style={{ fontSize: 13 }}>Работу можно запланировать после подтверждения геометрии этажа: объём берётся из подтверждённой версии.</p>}
-              {conf && dirty && <p className="muted" style={{ fontSize: 13 }}>Сначала сохраните замер: объём работы считается по сохранённым размерам.</p>}
+              ))}
+              <div><Btn small onClick={() => set({ zones: [...f.zones, { id: rowId('z'), name: '', purpose: '', area: 0 }] })}><Plus size={16} /> Добавить зону</Btn></div>
             </div>
           </Card>
-        )}
 
-        {room && (
-          <Card title="История помещения" note={`последний замер ${dFull(room.measuredAt)}, ${room.measuredBy}`}>
-            <Past list={[...room.history].reverse()} />
-            <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>Замер не перезаписывается: каждое изменение остаётся строкой в истории.</p>
+          <Card title="Неровности" action={worst !== undefined && worst >= 10 ? <Pill tone="warning">до {worst} мм</Pill> : undefined}>
+            <div className="stack" style={{ gap: 8 }}>
+              {f.uneven.map((x, i) => (
+                <div key={x.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 92px 44px', gap: 8, alignItems: 'center' }}>
+                  <input className="input" aria-label="Место неровности" value={x.place} onChange={(e) => setUneven(i, { place: e.target.value })} placeholder="Где: стена у окна" />
+                  <NumInput label="Неровность, мм" placeholder="мм" value={x.mm} onChange={(v) => setUneven(i, { mm: v })} />
+                  {removeBtn('Убрать неровность', () => set({ uneven: f.uneven.filter((_, j) => j !== i) }))}
+                </div>
+              ))}
+              <div><Btn small onClick={() => set({ uneven: [...f.uneven, { id: rowId('u'), place: '', mm: 0 }] })}><Plus size={16} /> Добавить неровность</Btn></div>
+            </div>
           </Card>
-        )}
+
+          <Card title="Заметки и фото">
+            <div className="form">
+              <VoiceArea label="Особенности помещения" value={f.note} onChange={(note) => set({ note })} placeholder="Что мешало измерить, что важно знать бригаде" />
+              <Photos count={f.photos} onChange={(photos) => set({ photos })} />
+            </div>
+          </Card>
+
+          {room && (
+            <Card title="Работы в помещении" flush>
+              {works.length > 0 && (
+                <List>
+                  {works.map((w) => {
+                    const st = workState(w, d.today);
+                    return (
+                      <Row key={w.id} wrap title={w.name} sub={`${w.crew ?? 'бригада не назначена'} · до ${dShort(w.deadline)}`}
+                        value={qty(w.plan, w.unit)} meta={<Pill tone={WORK_TONE[st]}>{WORK_LABEL[st]}</Pill>} />
+                    );
+                  })}
+                </List>
+              )}
+              <div className="card-body stack" style={{ gap: 8, borderTop: works.length ? '1px solid var(--rule)' : undefined }}>
+                <div><Btn small disabled={!conf || dirty} onClick={() => setPlan(true)}><Plus size={16} /> Запланировать работу</Btn></div>
+                {!conf && <p className="muted" style={small}>Можно после того, как замеры этажа примут.</p>}
+                {conf && dirty && <p className="muted" style={small}>Сначала сохраните замер.</p>}
+              </div>
+            </Card>
+          )}
+
+          {room && (
+            <Card title="История помещения">
+              <Past list={[...room.history].reverse()} />
+            </Card>
+          )}
+
+          {room && (
+            <div className="btn-row">
+              <IssueButton ctx={{ objectId: o.id, place: label, source: { kind: 'room', id: room.id, label } }}>Сообщить о проблеме</IssueButton>
+              <ShareButton path={roomPath(floor, room.id)} title={label} />
+            </div>
+          )}
+        </Details>
 
         <div className="sticky-cta" style={desktop ? { position: 'sticky', bottom: 16 } : undefined}>
           {leave ? (
@@ -666,18 +638,13 @@ function RoomForm({ o, floor, room }: { o: BuildObject; floor: string; room?: Ro
         </div>
 
         <Sheet open={asking} title="Причина изменения" onClose={() => setAsking(false)} dirty={!!reason.trim()}
-          foot={<><Btn onClick={() => setAsking(false)}>Отмена</Btn><Btn kind="primary" disabled={!reason.trim()} onClick={() => save(reason.trim())}>Сохранить в новой версии</Btn></>}>
-          {cur && (
-            <div className="form">
-              <p>
-                Версия {cur.num} этажа «{floor}» подтверждена{cur.confirmedAt ? ` ${dFull(cur.confirmedAt)}` : ''}. Будет открыта версия {cur.num + 1}:
-                подтверждённая останется в истории и будет основанием расчётов, пока новую не проверят.
-              </p>
-              <Field label="Причина изменения" help="Обязательное поле. Причина попадёт в историю версии и помещения.">
-                <VoiceArea label="Причина изменения" value={reason} onChange={setReason} placeholder="Например, повторный замер после демонтажа перегородки" />
-              </Field>
-            </div>
-          )}
+          foot={<><Btn onClick={() => setAsking(false)}>Отмена</Btn><Btn kind="primary" disabled={!reason.trim()} onClick={() => save(reason.trim())}>Сохранить</Btn></>}>
+          <div className="form">
+            <p>Замеры уже приняты: изменение отправится на проверку заново.</p>
+            <Field label="Почему меняете">
+              <VoiceArea label="Причина изменения" value={reason} onChange={setReason} placeholder="Например, повторный замер после демонтажа перегородки" />
+            </Field>
+          </div>
         </Sheet>
         {room && <PlanWorkSheet open={plan} onClose={() => setPlan(false)} room={room} />}
       </Page>
@@ -685,19 +652,19 @@ function RoomForm({ o, floor, room }: { o: BuildObject; floor: string; room?: Ro
   );
 }
 
-/** Plan a work from the room: the volume comes from the surface the technological card is calculated by and stays editable. */
+/** Plan a work from the room: the volume comes from the surface the norm is calculated by and stays editable. */
 function PlanWorkSheet({ open, onClose, room }: { open: boolean; onClose: () => void; room: Room }) {
   const d = useData();
   const conf = confirmedGeo(d, room.objectId, room.floor);
   const cur = currentGeo(d, room.objectId, room.floor);
-  // the volume comes from the confirmed version, not from a draft that is still being edited
+  // the volume comes from the accepted measurements, not from a draft that is still being edited
   const surfaceOf = (n?: Norm): number => (n?.base ? roomSurface(basisRoom(d, room) ?? room, n.base) : 0);
   const [normId, setNormId] = useState(() => d.norms[0]?.id ?? '');
   const [volume, setVolume] = useState(() => surfaceOf(d.norms[0]));
   const [deadline, setDeadline] = useState(() => addDays(d.today, 7));
   const [crew, setCrew] = useState('');
   const [touched, setTouched] = useState(false);
-  // every opening starts from the first card and the surface of the room as it is saved now
+  // every opening starts from the first norm and the surface of the room as it is saved now
   useEffect(() => {
     if (!open) return;
     const first = d.norms[0];
@@ -709,30 +676,28 @@ function PlanWorkSheet({ open, onClose, room }: { open: boolean; onClose: () => 
   const add = () => {
     if (!norm) return;
     act.createWork({ objectId: room.objectId, roomId: room.id, normId: norm.id, name: norm.work, unit: norm.unit, plan: volume, deadline, crew: crew.trim() });
-    toast(`Работа добавлена в план: ${qty(round1(volume), norm.unit)}`);
+    toast(`Работа добавлена: ${qty(round1(volume), norm.unit)}`);
     onClose();
   };
   return (
     <Sheet open={open} title="Запланировать работу" onClose={onClose} dirty={touched}
-      foot={<><Btn onClick={onClose}>Отмена</Btn><Btn kind="primary" disabled={!ok} onClick={add}>Добавить в план</Btn></>}>
+      foot={<><Btn onClick={onClose}>Отмена</Btn><Btn kind="primary" disabled={!ok} onClick={add}>Добавить</Btn></>}>
       <div className="form">
-        <p className="muted" style={{ fontSize: 13 }}>{room.name}, {room.floor} · основание: {conf ? `версия ${conf.num}` : 'подтверждённой версии нет'}</p>
-        {conf && cur && cur.id !== conf.id && (
-          <div className="notice">На этаже есть неподтверждённая версия {cur.num}. Работа будет привязана к версии {conf.num}.</div>
-        )}
-        <Field label="Технологическая карта">
+        <p className="muted" style={small}>{room.name}, {room.floor}</p>
+        {conf && cur && cur.id !== conf.id && <div className="notice">Замеры этажа меняются: объём взят из принятых.</div>}
+        <Field label="Норма">
           <select className="select" value={normId} onChange={(e) => { const n = byId(d.norms, e.target.value); setNormId(e.target.value); setVolume(surfaceOf(n)); setTouched(true); }}>
             {d.norms.map((n) => <option key={n.id} value={n.id}>{n.work}</option>)}
           </select>
         </Field>
         <Field label={`Объём, ${norm?.unit ?? ''}`}
-          help={norm?.base ? `${BASE_LABEL[norm.base]} помещения: ${sq(surfaceOf(norm))}. Объём можно поправить.` : 'В карте не указана поверхность: введите объём вручную.'}>
+          help={norm?.base ? `${BASE_LABEL[norm.base]} помещения: ${sq(surfaceOf(norm))}` : 'Введите объём вручную.'}>
           <NumInput label="Объём работы" value={volume} onChange={(v) => { setVolume(v); setTouched(true); }} />
         </Field>
         <Field label="Срок">
           <input className="input" type="date" min={d.today} value={deadline} onChange={(e) => { setDeadline(e.target.value); setTouched(true); }} />
         </Field>
-        <Field label="Бригада или исполнитель">
+        <Field label="Бригада">
           <input className="input" list="work-crews" value={crew} onChange={(e) => { setCrew(e.target.value); setTouched(true); }} placeholder="Например, бригада Сафина" />
           <datalist id="work-crews">{crews.map((c) => <option key={c} value={c} />)}</datalist>
         </Field>

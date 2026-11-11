@@ -423,3 +423,38 @@ table.table { width: 100%; border-collapse: collapse; font-variant-numeric: tabu
 .mic .icon-btn { position: absolute; right: 2px; bottom: 2px; }
 .mic .textarea { padding-right: 46px; }
 .mic .icon-btn.on { background: var(--pill-negative-bg); color: var(--negative); }
+
+/* ------------------------------------------------------- simplification */
+/* the path is a computer thing; a phone shows one step back */
+.back-phone { display: inline-flex; text-decoration: none; }
+@media (max-width: 999px) { .crumbs { display: none; } }
+@media (min-width: 1000px) { .back-phone { display: none; } }
+/* «Подробнее»: what is rarely needed stays one tap deeper */
+details.more { border-top: 1px solid var(--rule); }
+.card-body > details.more:first-child, .form > details.more, .stack > details.more { border-top: 0; }
+details.more > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 6px; min-height: 44px; color: var(--muted); font-weight: 500; }
+details.more > summary::-webkit-details-marker { display: none; }
+details.more > summary::after { content: ""; width: 7px; height: 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg) translateY(-2px); margin-left: 2px; }
+details.more[open] > summary::after { transform: rotate(-135deg) translateY(-1px); }
+details.more > summary:hover { color: var(--text); }
+.more-body { display: flex; flex-direction: column; gap: 14px; padding-bottom: 8px; }
+.list > details.more > summary, .card > details.more > summary { padding: 0 16px; }
+.list > details.more > .more-body, .card > details.more > .more-body { padding: 0 16px 12px; }
+@media (min-width: 1000px) {
+  .list > details.more > summary, .card > details.more > summary { padding: 0 var(--pad); }
+  .list > details.more > .more-body, .card > details.more > .more-body { padding: 0 var(--pad) 14px; }
+}
+.row.choice { min-height: 64px; }
+.row.choice svg:first-child { color: var(--muted); flex: none; }
+/* the big round «+» in the middle of the bottom bar */
+.tab.plus { color: var(--text); }
+.tab.plus .plus-dot { width: 46px; height: 46px; border-radius: 23px; background: var(--primary); color: #fff; display: grid; place-items: center; margin-top: -4px; }
+.side-new { margin: 8px 0 4px; }
+/* a segmented control with four options must fit a phone */
+@media (max-width: 699px) { .seg button { padding: 0 8px; } }
+/* on a computer big phone-style controls do not stretch across the whole screen */
+@media (min-width: 1000px) {
+  .card .btn.block, .stack > .btn.block, .card-body .btn.block { width: auto; min-width: 220px; max-width: 100%; align-self: flex-start; }
+  .seg.wide { max-width: 520px; }
+  .sheet .seg.wide { max-width: none; }
+}

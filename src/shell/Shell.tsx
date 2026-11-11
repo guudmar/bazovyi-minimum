@@ -1,13 +1,13 @@
-// The frame around every workspace.
-// Desktop: a labelled sidebar on the page ground. Phone: a top bar with the scope and a bottom bar of four sections plus «Ещё».
+// The frame around every workspace. Few sections, the same on a phone and on a computer.
+// Phone: a short top bar (object, search, profile) and a bottom bar of two to five sections; the foreman also gets a big «+».
+// Computer: the same sections in a sidebar.
 import { useEffect, useState, type ReactNode } from 'react';
-import { Link, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
-import { Bell, Ellipsis, FileText, ListChecks, Plus, Search, CircleUser } from 'lucide-react';
+import { Link, useLocation, useNavigationType, useNavigate } from 'react-router-dom';
+import { CircleUser, Plus, Search } from 'lucide-react';
 import { act, useData, useUser } from '../data/store';
-import { noticesFor, tasksFor } from '../data/select';
-import { Avatar, Sheet, Toaster } from '../ui/kit';
+import { Avatar, Toaster } from '../ui/kit';
 import { NAV, ROLE_LABEL, activeItem, type NavItem } from './nav';
-import { Launcher } from '../shared/composer';
+import { CreateSheet } from '../shared/composer';
 
 export function Mark({ size = 24 }: { size?: number }) {
   return (
@@ -20,13 +20,6 @@ export function Mark({ size = 24 }: { size?: number }) {
   );
 }
 
-const COMMON: NavItem[] = [
-  { to: '/tasks', label: 'Мои задачи', icon: ListChecks },
-  { to: '/documents', label: 'Документы', icon: FileText },
-  { to: '/notifications', label: 'Уведомления', icon: Bell },
-  { to: '/search', label: 'Поиск', icon: Search },
-];
-
 /** Scroll position of every visited screen, so «Назад» returns to the same place in a list. */
 const scrolls = new Map<string, number>();
 
@@ -35,21 +28,17 @@ export function Shell({ children }: { children: ReactNode }) {
   const user = useUser();
   const loc = useLocation();
   const nav = useNavigate();
-  const [more, setMore] = useState(false);
-  const [launch, setLaunch] = useState(false);
   const navType = useNavigationType();
+  const [create, setCreate] = useState(false);
   const items = NAV[user.role];
-  const current = activeItem([...items, ...COMMON, { to: '/profile', label: 'Профиль', icon: CircleUser }], loc.pathname);
-  const taskCount = tasksFor(d, user).length;
-  const noticeCount = noticesFor(d, user).length;
+  const current = activeItem(items, loc.pathname);
   const objects = d.objects.filter((o) => user.objectIds?.includes(o.id));
   const object = objects.find((o) => o.id === d.session.objectId) ?? objects[0];
+  const foreman = user.role === 'foreman';
 
   useEffect(() => {
-    setMore(false);
-    setLaunch(false);
+    setCreate(false);
     // a new screen opens at the top; going back returns to where the person was
-    // an address typed by hand has no key of its own, so the path is part of the key
     const at = `${loc.key}:${loc.pathname}${loc.search}`;
     window.scrollTo(0, navType === 'POP' ? scrolls.get(at) ?? 0 : 0);
     const save = () => scrolls.set(at, window.scrollY);
@@ -57,30 +46,20 @@ export function Shell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('scroll', save);
   }, [loc.key, loc.pathname, loc.search, navType]);
 
-  const groups: { name: string; items: NavItem[] }[] = [];
-  for (const it of items) {
-    const name = it.group ?? '';
-    const g = groups.find((x) => x.name === name);
-    if (g) g.items.push(it); else groups.push({ name, items: [it] });
-  }
-  const badgeOf = (it: NavItem) => (it.to === '/tasks' ? taskCount : it.badge ? it.badge(d, user) : 0);
-  const tabs = items.filter((i) => i.tab).slice(0, 4);
-  // a section that has no tab of its own lights up the tab of its group (Получение → Материалы)
-  const currentTab = tabs.find((t) => t === current) ?? (current?.group ? tabs.find((t) => t.group === current.group) : undefined);
-  const inTabs = !!currentTab;
-  const tabBadge = (it: NavItem) => badgeOf(it) + items.filter((x) => x !== it && !x.tab && x.group && x.group === it.group && tabs.find((t) => t.group === x.group) === it).reduce((s, x) => s + badgeOf(x), 0);
+  const badgeOf = (it: NavItem) => (it.badge ? it.badge(d, user) : 0);
 
-  const objectSelect = user.role === 'foreman' && objects.length > 0 && (
+  const objectSelect = foreman && objects.length > 1 && (
     <select className="select" aria-label="Объект" value={object?.id} onChange={(e) => act.setObject(e.target.value)}>
       {objects.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
     </select>
   );
 
-  const NavLink = ({ it }: { it: NavItem }) => {
+  const Tab = ({ it }: { it: NavItem }) => {
     const n = badgeOf(it);
+    const on = current === it;
     return (
-      <Link to={it.to} className={`nav-item ${current === it ? 'on' : ''}`} aria-current={current === it ? 'page' : undefined}>
-        <it.icon size={16} strokeWidth={1.6} />
+      <Link to={it.to} className={`tab ${on ? 'on' : ''}`} aria-current={on ? 'page' : undefined}>
+        <it.icon size={22} strokeWidth={on ? 2 : 1.6} />
         <span className="t">{it.label}</span>
         {n > 0 && <span className="badge">{n}</span>}
       </Link>
@@ -99,16 +78,22 @@ export function Shell({ children }: { children: ReactNode }) {
           </span>
         </Link>
         {objectSelect}
-        <button className="btn block" style={{ margin: '8px 0 4px' }} onClick={() => setLaunch(true)}><Plus size={16} /> Что нужно сделать</button>
-        <nav aria-label="Разделы">
-          {groups.map((g) => (
-            <div key={g.name}>
-              {g.name && <div className="side-group">{g.name}</div>}
-              {g.items.map((it) => <NavLink key={it.to} it={it} />)}
-            </div>
-          ))}
-          <div className="side-group">Общее</div>
-          {COMMON.map((it) => <NavLink key={it.to} it={it} />)}
+        {foreman && <button className="btn primary block side-new" onClick={() => setCreate(true)}><Plus size={16} /> Создать</button>}
+        <nav aria-label="Разделы" style={{ marginTop: 8 }}>
+          {items.map((it) => {
+            const n = badgeOf(it);
+            const on = current === it;
+            return (
+              <Link key={it.to} to={it.to} className={`nav-item ${on ? 'on' : ''}`} aria-current={on ? 'page' : undefined}>
+                <it.icon size={16} strokeWidth={1.6} />
+                <span className="t">{it.label}</span>
+                {n > 0 && <span className="badge">{n}</span>}
+              </Link>
+            );
+          })}
+          <Link to="/search" className={`nav-item ${loc.pathname === '/search' ? 'on' : ''}`}>
+            <Search size={16} strokeWidth={1.6} /><span className="t">Поиск</span>
+          </Link>
         </nav>
         <div className="side-foot">
           <button className="nav-item" onClick={() => { act.logout(); nav('/'); }}><CircleUser size={16} strokeWidth={1.6} /><span className="t">Сменить роль</span></button>
@@ -119,65 +104,35 @@ export function Shell({ children }: { children: ReactNode }) {
         <header className="topbar">
           <Link to={`/${user.role}`} aria-label="На главную" style={{ display: 'grid' }}><Mark size={26} /></Link>
           <div className="grow">
-            {user.role === 'foreman' && objects.length > 0 ? (
-              <>
-                <span className="scope">{ROLE_LABEL[user.role]}</span>
-                <select aria-label="Объект" value={object?.id} onChange={(e) => act.setObject(e.target.value)}
-                  style={{ border: 0, background: 'transparent', fontWeight: 600, fontSize: 15, padding: 0, maxWidth: '100%', textOverflow: 'ellipsis' }}>
-                  {objects.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                </select>
-              </>
+            {foreman && objects.length > 1 ? (
+              <select aria-label="Объект" value={object?.id} onChange={(e) => act.setObject(e.target.value)}
+                style={{ border: 0, background: 'transparent', fontWeight: 600, fontSize: 16, padding: 0, maxWidth: '100%', textOverflow: 'ellipsis' }}>
+                {objects.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+              </select>
             ) : (
-              <>
-                <span className="brand-name">Базовый минимум</span>
-                <span className="scope">{ROLE_LABEL[user.role]} · {user.name}</span>
-              </>
+              <span className="brand-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{foreman && object ? object.name : 'Базовый минимум'}</span>
             )}
           </div>
-          <button className="icon-btn" aria-label="Что нужно сделать" onClick={() => setLaunch(true)}><Plus size={23} strokeWidth={1.8} /></button>
           <Link to="/search" className="icon-btn" aria-label="Поиск"><Search size={21} strokeWidth={1.7} /></Link>
-          <Link to="/notifications" className="icon-btn" aria-label={`Уведомления: ${noticeCount}`}>
-            <Bell size={21} strokeWidth={1.7} />
-            {noticeCount > 0 && <span className="dot">{noticeCount}</span>}
-          </Link>
+          <Link to="/profile" className="icon-btn" aria-label={`Профиль: ${user.name}`}><Avatar user={user} small /></Link>
         </header>
 
         {children}
       </div>
 
-      <nav className="tabbar" aria-label="Основные разделы">
-        {tabs.map((it) => {
-          const n = tabBadge(it);
-          return (
-            <Link key={it.to} to={it.to} className={`tab ${currentTab === it ? 'on' : ''}`} aria-current={currentTab === it ? 'page' : undefined}>
-              <it.icon size={22} strokeWidth={currentTab === it ? 2 : 1.6} />
-              <span className="t">{it.short ?? it.label}</span>
-              {n > 0 && <span className="badge">{n}</span>}
-            </Link>
-          );
-        })}
-        <button className={`tab ${!inTabs ? 'on' : ''}`} onClick={() => setMore(true)} aria-haspopup="dialog">
-          <Ellipsis size={22} strokeWidth={1.6} />
-          <span className="t">Ещё</span>
-          {taskCount > 0 && <span className="badge">{taskCount}</span>}
-        </button>
+      <nav className="tabbar" aria-label="Разделы">
+        {foreman ? (
+          <>
+            <Tab it={items[0]} />
+            <button className="tab plus" onClick={() => setCreate(true)} aria-haspopup="dialog" aria-label="Создать">
+              <span className="plus-dot"><Plus size={24} strokeWidth={2.2} /></span>
+            </button>
+            <Tab it={items[1]} />
+          </>
+        ) : items.map((it) => <Tab key={it.to} it={it} />)}
       </nav>
 
-      <Sheet open={more} title="Все разделы" onClose={() => setMore(false)}>
-        <div className="list" style={{ margin: '-8px -16px' }}>
-          {[...COMMON, ...items.filter((i) => !tabs.includes(i)), { to: '/profile', label: 'Профиль и смена роли', icon: CircleUser } as NavItem].map((it) => {
-            const n = badgeOf(it);
-            return (
-              <Link key={it.to} to={it.to} className="row" onClick={() => setMore(false)}>
-                <it.icon size={20} strokeWidth={1.6} color="var(--muted)" />
-                <span className="row-main"><span className="row-title">{it.label}</span></span>
-                {n > 0 && <span className="badge">{n}</span>}
-              </Link>
-            );
-          })}
-        </div>
-      </Sheet>
-      <Launcher open={launch} onClose={() => setLaunch(false)} />
+      {foreman && <CreateSheet open={create} onClose={() => setCreate(false)} />}
       <Toaster />
     </div>
   );

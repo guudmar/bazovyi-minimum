@@ -20,10 +20,10 @@ export const atRisk = (d: Data, p: Purchase): boolean =>
 /** The wanted date deserves red: the order is not placed in time, or the date passed and the material is not on site. */
 export const wantLate = (d: Data, p: Purchase): boolean => atRisk(d, p) || (p.status !== 'received' && p.wantDate < d.today);
 
-/** A delivery as the supplier reads it. Sending is not receiving: «В пути» stays until the foreman confirms the receipt. */
+/** A delivery as the supplier reads it, problems first. Sending is not receiving: «Едет» stays until the foreman confirms the receipt. */
 export const DELIVERY: Record<Delivery['status'], { label: string; tone: Tone; rank: number }> = {
-  expected: { label: 'В пути', tone: 'hue', rank: 0 },
-  problem: { label: 'Расхождение', tone: 'negative', rank: 1 },
+  problem: { label: 'Расхождение', tone: 'negative', rank: 0 },
+  expected: { label: 'Едет', tone: 'hue', rank: 1 },
   received: { label: 'Получено', tone: 'positive', rank: 2 },
 };
 /** The delivery that was created when the supplier shipped the purchase. */

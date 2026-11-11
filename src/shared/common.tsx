@@ -1,48 +1,56 @@
-// Sections every role has: tasks, notifications, search, profile.
+// What every role has: the list of things to do (the home of every workspace), what is new, search, profile.
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search as SearchIcon } from 'lucide-react';
 import { act, useData, useUser } from '../data/store';
 import { noticesFor, search, tasksFor } from '../data/select';
-import { Avatar, Btn, Card, Empty, List, Page, Pill, Row, toast } from '../ui/kit';
-import { count, dRel } from '../lib/format';
+import { Avatar, Btn, Card, Details, Empty, List, Page, Row, Status, toast } from '../ui/kit';
+import { dRel } from '../lib/format';
 import { ROLE_ABOUT, ROLE_LABEL } from '../shell/nav';
 import type { RoleId } from '../data/types';
 
-export function Tasks() {
+/**
+ * Things the person has to do now. It replaces «Мои задачи», «Уведомления» and the old launcher:
+ * every row opens the action itself. Urgent ones go first.
+ */
+export function TodoCard({ title = 'Нужно сделать', limit, empty = 'Сейчас от вас ничего не требуется.' }: { title?: string; limit?: number; empty?: string }) {
   const d = useData();
   const u = useUser();
-  const tasks = tasksFor(d, u);
+  const all = tasksFor(d, u).sort((a, b) => Number(b.tone === 'negative') - Number(a.tone === 'negative'));
+  const shown = limit ? all.slice(0, limit) : all;
   return (
-    <Page title="Мои задачи" sub={tasks.length ? `${count(tasks.length, 'действие ждёт', 'действия ждут', 'действий ждут')} вас. Задачи собираются сами из состояния процессов.` : undefined}>
-      <Card flush>
-        {tasks.length ? (
-          <List>
-            {tasks.map((t) => (
-              <Row key={t.id + t.title} to={t.to} wrap title={t.title} sub={t.sub}
-                side={t.tone === 'negative' ? <Pill tone="negative">Срочно</Pill> : undefined} />
-            ))}
-          </List>
-        ) : <div className="card-body"><Empty>Сейчас от вас ничего не требуется.</Empty></div>}
-      </Card>
-    </Page>
+    <Card title={title} note={all.length ? String(all.length) : undefined} flush>
+      {all.length ? (
+        <List>
+          {shown.map((t) => (
+            <Row key={t.id + t.title} to={t.to} wrap title={t.title} sub={t.sub}
+              side={t.tone === 'negative' ? <Status kind="problem">Срочно</Status> : undefined} />
+          ))}
+          {limit && all.length > limit && (
+            <Details label={`Ещё ${all.length - limit}`}>
+              <List>{all.slice(limit).map((t) => <Row key={t.id + t.title} to={t.to} wrap title={t.title} sub={t.sub} />)}</List>
+            </Details>
+          )}
+        </List>
+      ) : <div className="card-body"><Empty>{empty}</Empty></div>}
+    </Card>
   );
 }
 
-export function Notifications({ title = 'Уведомления', sub }: { title?: string; sub?: string }) {
+/** What changed recently. Three newest are visible, the rest fold under «Ещё». */
+export function NewsCard({ limit = 3, skip }: { limit?: number; skip?: (to: string) => boolean }) {
   const d = useData();
   const u = useUser();
-  const items = noticesFor(d, u);
+  const items = noticesFor(d, u).filter((n) => !skip?.(n.to));
+  if (!items.length) return null;
+  const row = (n: (typeof items)[number]) => <Row key={n.id + n.title} to={n.to} wrap title={n.title} sub={n.sub} meta={dRel(n.at, d.today)} />;
   return (
-    <Page title={title} sub={sub}>
-      <Card flush>
-        {items.length ? (
-          <List>
-            {items.map((n) => <Row key={n.id + n.title} to={n.to} wrap title={n.title} sub={n.sub} meta={dRel(n.at, d.today)} />)}
-          </List>
-        ) : <div className="card-body"><Empty>Новых событий нет.</Empty></div>}
-      </Card>
-    </Page>
+    <Card title="Что нового" flush>
+      <List>
+        {items.slice(0, limit).map(row)}
+        {items.length > limit && <Details label={`Ещё ${items.length - limit}`}><List>{items.slice(limit).map(row)}</List></Details>}
+      </List>
+    </Card>
   );
 }
 
@@ -52,10 +60,10 @@ export function SearchPage() {
   const [q, setQ] = useState('');
   const hits = search(d, u, q);
   return (
-    <Page title="Поиск" sub="Объекты, материалы, потребности, операции и заявки, к которым у вас есть доступ.">
+    <Page title="Поиск">
       <div style={{ position: 'relative' }}>
         <SearchIcon size={18} color="var(--muted)" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
-        <input className="input" style={{ paddingLeft: 38 }} autoFocus type="search" placeholder="Например: гипсокартон, Лесная, Техпрокат" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поисковый запрос" />
+        <input className="input" style={{ paddingLeft: 38 }} autoFocus type="search" placeholder="Материал, объект, контрагент, номер" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поисковый запрос" />
       </div>
       {q.trim().length >= 2 && (
         <Card flush>
@@ -82,34 +90,30 @@ export function Profile() {
           <Avatar user={u} />
           <div style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 600, fontSize: 16 }}>{u.name}</div>
-            <div className="muted">{u.title}{objects.length ? ` · ${objects.map((o) => o.name).join(', ')}` : ''}</div>
+            <div className="muted">{ROLE_LABEL[u.role]}{objects.length ? ` · ${objects.map((o) => o.name).join(', ')}` : ''}</div>
           </div>
         </div>
       </Card>
-      <Card title="Войти под другой ролью" flush>
+      <Card flush>
         <List>
-          {(Object.keys(ENTRY) as RoleId[]).filter((r) => r !== u.role).map((r) => {
-            const other = d.users.find((x) => x.id === ENTRY[r])!;
-            return <Row key={r} media={<Avatar user={other} />} title={ROLE_LABEL[r]} sub={`${other.name}. ${ROLE_ABOUT[r]}`} onClick={() => { act.login(other.id); nav(`/${r}`); }} />;
-          })}
+          <Row to="/documents" title="Документы" sub="Акты, заявки, поставки и замечания" />
+          <Row onClick={() => { act.logout(); nav('/'); }} title="Сменить роль" sub="Демо: войти как другой участник" />
         </List>
       </Card>
-      <Card title="Дополнительно" flush>
-        <List>
-          <Row to="/documents" title="Документы" sub="Акты, потребности, поставки, замечания и заявки со ссылками на исходные записи" />
-          <Row to="/modules" title="Модули приложения" sub="Из каких инструментов состоит приложение и что доступно вашей роли" />
-          <Row to="/tech" title="Технологии и интеграции" sub="Что уже работает в демо и что подключается дальше" />
-        </List>
-      </Card>
-      <Card title="Демо-данные">
-        <p className="muted" style={{ marginBottom: 12, maxWidth: '68ch' }}>
-          Всё, что вы вносите, хранится в этом браузере и видно только вам. Сброс вернёт исходные вымышленные данные и удалит ваши изменения.
-        </p>
-        <div className="btn-row">
-          <Btn kind="danger" onClick={() => { act.resetDemo(); toast('Демо-данные возвращены к исходным'); }}>Сбросить демо-данные</Btn>
-          <Btn onClick={() => { act.logout(); nav('/'); }}>Выйти к выбору роли</Btn>
-        </div>
-      </Card>
+      <Details label="Войти под другой ролью сразу">
+        <Card flush>
+          <List>
+            {(Object.keys(ENTRY) as RoleId[]).filter((r) => r !== u.role).map((r) => {
+              const other = d.users.find((x) => x.id === ENTRY[r])!;
+              return <Row key={r} media={<Avatar user={other} />} title={ROLE_LABEL[r]} sub={`${other.name}. ${ROLE_ABOUT[r]}`} onClick={() => { act.login(other.id); nav(`/${r}`); }} />;
+            })}
+          </List>
+        </Card>
+      </Details>
+      <Details label="Демо-данные">
+        <p className="muted">Всё, что вы вносите, хранится в этом браузере. Сброс вернёт исходные данные.</p>
+        <div><Btn kind="danger" onClick={() => { act.resetDemo(); toast('Демо-данные возвращены к исходным'); }}>Сбросить демо-данные</Btn></div>
+      </Details>
     </Page>
   );
 }

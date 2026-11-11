@@ -6,8 +6,8 @@ import { byId } from './data/select';
 import type { RoleId } from './data/types';
 import { Shell } from './shell/Shell';
 import { EnterAs, Login } from './shell/Login';
-import { Notifications, Profile, SearchPage, Tasks } from './shared/common';
-import { Documents, Modules, Tech } from './shared/composer';
+import { Profile, SearchPage } from './shared/common';
+import { Documents } from './shared/composer';
 import { routes as owner } from './roles/owner';
 import { routes as foreman } from './roles/foreman';
 import { routes as manager } from './roles/manager';
@@ -27,13 +27,12 @@ export default function App() {
         <Shell>
           <Routes>
             {ROUTES[role].map((r) => <Route key={r.path} path={r.path} element={r.element} />)}
-            <Route path="/tasks" element={<Tasks />} />
-            <Route path="/notifications" element={<Notifications />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/documents" element={<Documents />} />
-            <Route path="/tech" element={<Tech />} />
-            <Route path="/modules" element={<Modules />} />
+            {/* tasks and notifications now live on the home screen of every role */}
+            <Route path="/tasks" element={<Navigate to={`/${role}`} replace />} />
+            <Route path="/notifications" element={<Navigate to={`/${role}`} replace />} />
             <Route path="/as/:role" element={<EnterAs />} />
             <Route path="*" element={<Navigate to={`/${role}`} replace />} />
           </Routes>

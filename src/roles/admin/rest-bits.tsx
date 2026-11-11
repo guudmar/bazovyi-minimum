@@ -81,7 +81,7 @@ export function NeedLineBlock({ line, caption, legend, parts }: { line: NeedLine
             );
           })}
         </div>
-      ) : <p className="muted" style={{ marginTop: 8, fontSize: 13 }}>Маршрут ещё не назначен.</p>)}
+      ) : <p className="muted" style={{ marginTop: 8, fontSize: 13 }}>Пока не решено, откуда.</p>)}
     </div>
   );
 }
